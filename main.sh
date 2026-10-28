@@ -51,6 +51,7 @@ CSV_META="${SCRIPT_DIR}/TechnoMart Funza - TEMP.csv"
 LOGO_PNG="${SCRIPT_DIR}/logo.png"
 VENV_DIR="${SCRIPT_DIR}/ocr_env"
 RUN_OCR="${SCRIPT_DIR}/run_ocr.sh"
+MARCA_AGUA="${SCRIPT_DIR}/marca_agua.py"
 
 # Registro CSV principal (solo libros exitosos)
 REGISTRO_CSV="${REGISTRO_DIR}/registro_libros_procesados.csv"
@@ -80,6 +81,14 @@ OCR_JOBS=""
 # Texto de la marca de agua, al pie de cada página junto al logo (--texto-marca;
 # vacío = solo el logo)
 WATERMARK_TEXT="CONGRESO DE LA REPÚBLICA - REPOSITORIO CÁMARA DE REPRESENTANTES"
+
+# Marca diagonal opcional, ascendente de izquierda a derecha (--marca-diagonal;
+# vacío = sin marca diagonal, que es lo predeterminado)
+DIAGONAL_TEXT=""
+
+# JSON con posición, transparencia y tamaño de logo, texto y diagonal
+# (--marca-config; vacío = valores predeterminados de marca_agua.py)
+MARCA_CONFIG=""
 
 # Libro actualmente en proceso — usado por el trap para liberarlo si se interrumpe
 CURRENT_BOOK=""
@@ -253,6 +262,10 @@ check_deps() {
     [[ -f "$LOGO_PNG"              ]] || { log_error "Falta logo: $LOGO_PNG";  missing=$((missing+1)); }
     [[ -f "$CSV_META"              ]] || { log_error "Falta CSV: $CSV_META";   missing=$((missing+1)); }
     [[ -f "$RUN_OCR"               ]] || { log_error "Falta: $RUN_OCR";        missing=$((missing+1)); }
+    [[ -f "$MARCA_AGUA"            ]] || { log_error "Falta: $MARCA_AGUA";     missing=$((missing+1)); }
+    if [[ -n "$MARCA_CONFIG" && ! -f "$MARCA_CONFIG" ]]; then
+        log_error "Falta configuración de marca de agua: $MARCA_CONFIG"; missing=$((missing+1))
+    fi
     if [[ $missing -gt 0 ]]; then
         log_error "$missing dependencia(s) faltante(s). Abortando."
         exit 1
@@ -400,126 +413,13 @@ step3_watermark() {
 
     log_info "[${book_name}] Aplicando marca de agua (optimizada)..."
 
-    # Rutas por variables de entorno (heredoc entre comillas: bash no toca el código)
-    LOGO_PATH="$LOGO_PNG" IN_PDF="$book_pdf" OUT_PDF="$tmp_pdf" WM_TEXT="$WATERMARK_TEXT" python3 - <<'PYEOF'
-import os
-import sys
-from io import BytesIO
-from pypdf import PdfReader, PdfWriter
-from reportlab.pdfgen import canvas
-from reportlab.lib.utils import ImageReader
-from PIL import Image
-
-logo_path = os.environ["LOGO_PATH"]
-in_path   = os.environ["IN_PDF"]
-out_path  = os.environ["OUT_PDF"]
-
-CM_TO_POINTS     = 72 / 2.54
-WATERMARK_TEXT   = os.environ.get("WM_TEXT", "").strip()   # vacío = solo el logo
-TEXT_OPACITY     = 0.20
-LOGO_OPACITY     = 0.25
-
-# ── Tamaño RELATIVO al tamaño de cada página ───────────────────────────────
-# Antes el logo tenía ancho FIJO (159 pts) y el texto fuente FIJA (12), así que
-# en libros de páginas pequeñas el logo salía desproporcionado y el texto se
-# cortaba. Ahora todo se escala al ancho de cada página y el texto se ajusta
-# para que SIEMPRE quepa completo.
-LOGO_WIDTH_FRAC = 0.20     # ancho del logo = 20% del ancho de la página
-LOGO_MIN_W      = 45       # pts — no más pequeño que esto
-LOGO_MAX_W      = 180      # pts — no más grande (p. ej. en dobles páginas)
-LOGO_MAX_H_FRAC = 0.18     # el logo no ocupará más del 18% del alto de la página
-TEXT_MAX_SIZE   = 12       # pts — tamaño de fuente en páginas anchas
-MARGIN_FRAC     = 0.04     # margen = 4% del ancho/alto de la página…
-MARGIN_CAP      = 1.5 * CM_TO_POINTS   # …con tope de 1.5 cm
-MARGIN_FLOOR    = 6        # …y piso de 6 pts
-
-# Relación de aspecto del logo (alto/ancho) según sus píxeles reales
-img = Image.open(logo_path)
-LOGO_ASPECT = img.height / img.width
-img.close()
-
-# ImageReader construido UNA sola vez — evita re-leer el logo del disco por página
-logo_reader = ImageReader(logo_path)
-
-def _clamp(v, lo, hi):
-    return max(lo, min(hi, v))
-
-# Cache de overlays por dimensión (pw, ph): como el tamaño ahora depende solo
-# de (pw, ph), el caché sigue siendo válido (1 overlay por tamaño de página).
-wm_cache = {}
-
-def make_wm_page(pw, ph):
-    key = (round(pw, 2), round(ph, 2))
-    if key in wm_cache:
-        cached = wm_cache[key]
-        cached.seek(0)
-        return cached
-
-    margin_x   = _clamp(MARGIN_FRAC * pw, MARGIN_FLOOR, MARGIN_CAP)
-    margin_top = _clamp(MARGIN_FRAC * ph, MARGIN_FLOOR, MARGIN_CAP)
-    text_y     = _clamp(0.5 * MARGIN_FRAC * ph, 4, 0.5 * CM_TO_POINTS)
-
-    # Logo: ancho relativo, con límites, respetando aspecto y sin desbordar
-    logo_w = _clamp(LOGO_WIDTH_FRAC * pw, LOGO_MIN_W, min(LOGO_MAX_W, pw - 2 * margin_x))
-    logo_h = logo_w * LOGO_ASPECT
-    if logo_h > LOGO_MAX_H_FRAC * ph:          # páginas muy anchas y bajas
-        logo_h = LOGO_MAX_H_FRAC * ph
-        logo_w = logo_h / LOGO_ASPECT
-
-    pkt = BytesIO()
-    c = canvas.Canvas(pkt, pagesize=(pw, ph))
-
-    # ── Texto inferior: encoger la fuente para que SIEMPRE quepa (nunca se corta)
-    if WATERMARK_TEXT:
-        avail = pw - 2 * margin_x
-        tw = c.stringWidth(WATERMARK_TEXT, "Helvetica", TEXT_MAX_SIZE)
-        font_size = TEXT_MAX_SIZE if tw <= avail else (TEXT_MAX_SIZE * avail / tw)
-        c.saveState()
-        c.setFillAlpha(TEXT_OPACITY)
-        c.setFont("Helvetica", font_size)
-        c.drawString(margin_x, text_y, WATERMARK_TEXT)
-        c.restoreState()
-
-    # ── Logo arriba-izquierda
-    c.saveState()
-    c.setFillAlpha(LOGO_OPACITY)
-    c.setStrokeAlpha(LOGO_OPACITY)
-    ty = ph - logo_h - margin_top
-    c.drawImage(logo_reader, x=margin_x, y=ty,
-                width=logo_w, height=logo_h, preserveAspectRatio=True, mask='auto')
-    c.restoreState()
-    c.save()
-    pkt.seek(0)
-    result = BytesIO(pkt.read())
-    wm_cache[key] = result
-    return result
-
-reader = PdfReader(in_path)
-writer = PdfWriter()
-if reader.metadata:
-    writer.add_metadata(reader.metadata)
-
-for page in reader.pages:
-    # /Rotate se pasa al contenido para que la marca quede derecha tal como se ve
-    if page.rotation:
-        page.transfer_rotation_to_content()
-    # Área visible (cropbox, por defecto = mediabox); su origen puede no ser (0,0)
-    box = page.cropbox
-    pw = float(box.width)
-    ph = float(box.height)
-    wm_bytes = make_wm_page(pw, ph)
-    wm_bytes.seek(0)
-    wm = PdfReader(wm_bytes)
-    page.merge_translated_page(wm.pages[0], tx=float(box.left), ty=float(box.bottom))
-    writer.add_page(page)
-
-with open(out_path, "wb") as f:
-    writer.write(f)
-
-n_pages  = len(reader.pages)
-n_unique = len(wm_cache)
-print(f"[WATERMARK] {n_pages} págs | {n_unique} tamaño(s) | {n_pages - n_unique} overlays reutilizados del caché", file=sys.stderr)
-PYEOF
+    # Logo, texto al pie y marca diagonal: posición, transparencia y tamaño de cada
+    # uno vienen de --marca-config (JSON); sin él, marca_agua.py usa sus valores
+    # predeterminados. Las rutas van como argumentos: ninguna se mete en código.
+    local -a marca_args=(--entrada "$book_pdf" --salida "$tmp_pdf" --logo "$LOGO_PNG"
+                         --texto "$WATERMARK_TEXT" --diagonal "$DIAGONAL_TEXT")
+    if [[ -n "$MARCA_CONFIG" ]]; then marca_args+=(--config "$MARCA_CONFIG"); fi
+    python3 "$MARCA_AGUA" "${marca_args[@]}" || rm -f "$tmp_pdf"
 
     if commit_pdf "$tmp_pdf" "$out_pdf"; then
         log_ok "[${book_name}] Marca de agua aplicada → $(basename "$out_pdf")"
@@ -935,6 +835,10 @@ usage() {
     --ocr-jobs <N>      Procesos de Tesseract en paralelo (default: el de OCR.sh).
     --texto-marca <txt> Texto de la marca de agua al pie de página ("" = solo logo).
                         Default: CONGRESO DE LA REPÚBLICA - REPOSITORIO CÁMARA DE REPRESENTANTES
+    --marca-diagonal <txt>  Marca diagonal opcional (de abajo-izquierda a arriba-derecha),
+                        p. ej. "CÁMARA DE REPRESENTANTES". Default: sin marca diagonal.
+    --marca-config <json>  Posición, transparencia y tamaño de logo, texto y diagonal
+                        (formato en la cabecera de marca_agua.py). Default: los de siempre.
     --input-dir <ruta>     Carpeta INPUT       (default: /mnt/datos/INPUT)
     --output-dir <ruta>    Carpeta OUTPUT      (default: /mnt/datos/OUTPUT)
     --temp-dir <ruta>      Carpeta TEMPORALES  (default: /mnt/datos/TEMPORALES)
@@ -987,6 +891,8 @@ parse_args() {
             --logo)             LOGO_PNG="$2"; shift 2 ;;
             --ocr-jobs)         OCR_JOBS="$2"; shift 2 ;;
             --texto-marca)      WATERMARK_TEXT="$2"; shift 2 ;;
+            --marca-diagonal)   DIAGONAL_TEXT="$2"; shift 2 ;;
+            --marca-config)     MARCA_CONFIG="$2"; shift 2 ;;
             --input-dir)        INPUT_DIR="$2"; shift 2 ;;
             --output-dir)       OUTPUT_DIR="$2"; shift 2 ;;
             --temp-dir)         TEMP_DIR="$2"; shift 2 ;;

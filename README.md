@@ -52,22 +52,42 @@ aplicaciones y en el escritorio.
 
 ## Interfaz de escritorio
 
-`interfaz/app.py` (PySide6) prepara y lanza `main.sh`:
+`interfaz/app.py` (PySide6) prepara y lanza `main.sh`. Se organiza en pestañas:
 
-1. **Configuración:** CSV de metadatos, logo y texto de la marca de agua,
-   carpetas de trabajo y datos del equipo (RAM, hilos y gráfica; el botón
-   "Detectar este equipo" los llena). Con ellos calcula la combinación más
-   rápida de procesos de OCR y libros en paralelo, que se puede ajustar a mano.
-2. **Libros a procesar:** los libros de INPUT con páginas, tamaño y si están
-   en el CSV; se marcan los que se quieren procesar. Exportar PNG es opcional.
-3. **En proceso:** avance por libro, CPU, RAM, disco y log en vivo. "Detener"
-   equivale a Ctrl+C.
-4. **Resultados:** exitosos, sin metadatos, en REVIEW y por reintentar.
+- **PROCESAMIENTO**
+  1. CSV de metadatos y resumen del rendimiento que se usará.
+  2. Libros de INPUT con páginas, tamaño y si están en el CSV; se marcan los
+     que se quieren procesar. Exportar PNG es opcional.
+  3. En proceso: avance por libro, CPU, RAM, disco y log en vivo. "Detener"
+     equivale a Ctrl+C.
+  4. Resultados: exitosos, sin metadatos, en REVIEW y por reintentar.
+- **MARCAS DE AGUA:** logo, texto al pie y marca diagonal opcional
+  («CÁMARA DE REPRESENTANTES»), cada uno con posición, transparencia y tamaño
+  propios, y una vista previa que usa el mismo código que estampa los PDF.
+- **CARPETAS DE TRABAJO:** INPUT, OUTPUT, REVIEW y PNG.
+- **COMPONENTES:** RAM, hilos y gráfica del equipo ("Detectar este equipo" los
+  llena). Con ellos calcula la combinación más rápida de procesos de OCR y
+  libros en paralelo, que se puede ajustar a mano.
+- **INYECTAR METADATOS:** en construcción.
 
 Tiene modo claro y oscuro, y recuerda la última configuración.
 
-Los textos de marca de agua permitidos están en `TEXTOS_MARCA`, al inicio de
-`interfaz/app.py`; no se editan desde la interfaz.
+Los textos de marca de agua permitidos están en `TEXTOS_MARCA` y
+`MARCA_DIAGONAL`, al inicio de `interfaz/app.py`; no se editan desde la
+interfaz.
+
+## Marca de agua
+
+`marca_agua.py` estampa la marca (lo llama `main.sh` en el paso 3). Sin
+`--marca-config` usa los valores de siempre:
+
+| Elemento | Posición | Opacidad | Tamaño |
+|---|---|---|---|
+| Logo | arriba-izquierda | 25 % | 20 % del ancho de página |
+| Texto al pie | abajo-izquierda | 20 % | 12 pt (se reduce si no cabe) |
+| Diagonal (opcional) | centro | 12 % | 80 % de la diagonal |
+
+El formato del JSON de `--marca-config` está en la cabecera de `marca_agua.py`.
 
 ## Archivos que no están en el repositorio
 
@@ -90,6 +110,7 @@ bash main.sh --jobs 2 --ocr-jobs 12   # 2 libros en post-proceso, 12 Tesseract
 bash main.sh --skip-ocr               # sin OCR (PDF del OCR ya en TEMPORALES)
 bash main.sh --only-book AR10582 --png
 bash main.sh --csv meta.csv --logo logo.png --input-dir /datos/IN --output-dir /datos/OUT
+bash main.sh --marca-diagonal "CÁMARA DE REPRESENTANTES" --marca-config marca.json
 ```
 
 Todas las opciones: `bash main.sh -h`.

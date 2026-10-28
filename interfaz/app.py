@@ -12,6 +12,7 @@
 #           Ctrl+C (SIGINT al grupo de procesos), igual que en la terminal.
 # =============================================================================
 
+import json
 import os
 import re
 import signal
@@ -21,12 +22,14 @@ import threading
 from pathlib import Path
 
 import psutil
-from PySide6.QtCore import QObject, QSettings, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import (QBuffer, QByteArray, QIODevice, QObject, QSettings, QSize, Qt, QTimer, QUrl,
+                            Signal)
 from PySide6.QtGui import QColor, QDesktopServices, QFont, QFontDatabase, QIcon, QPalette, QPixmap
+from PySide6.QtPdf import QPdfDocument
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout,
     QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit,
-    QProgressBar, QPushButton, QScrollArea, QSlider, QSpinBox, QTableWidget,
+    QProgressBar, QPushButton, QScrollArea, QSlider, QSpinBox, QTabWidget, QTableWidget,
     QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -37,6 +40,13 @@ from PySide6.QtWidgets import (
 SCRIPT_DIR = Path(__file__).resolve().parent.parent
 MAIN_SH = SCRIPT_DIR / "main.sh"
 ICONO = Path(__file__).resolve().parent / "icono.svg"
+MARCA_JSON = SCRIPT_DIR / "logs" / "marca_interfaz.json"   # lo que se pasa a main.sh
+
+# La vista previa usa el mismo código que estampa la marca en los PDF
+sys.path.insert(0, str(SCRIPT_DIR))
+import marca_agua as MA  # noqa: E402
+
+PREVIEW_W, PREVIEW_H = 150, 212    # proporción A4
 
 DATOS_DIR = Path(os.environ.get("DATOS_DIR", "/mnt/datos"))
 
@@ -89,6 +99,8 @@ SIN_GPU = "Sin tarjeta gráfica dedicada"
 TEXTOS_MARCA = [
     "CONGRESO DE LA REPÚBLICA - REPOSITORIO CÁMARA DE REPRESENTANTES",
 ]
+# Marca diagonal opcional (ascendente de izquierda a derecha), también fija
+MARCA_DIAGONAL = "CÁMARA DE REPRESENTANTES"
 
 
 def recomendar(ram_gb, hilos, gpu):
@@ -203,6 +215,13 @@ QFrame#logoChip {{ background: #ffffff; border-radius: 8px; }}
 QFrame#separador {{ background: {t['borde']}; }}
 QFrame#lineaRoja {{ background: {t['rojo']}; }}
 QFrame#card {{ background: {t['card']}; border: 1px solid {t['borde']}; border-radius: 10px; }}
+QTabWidget#pestanas::pane {{ border: none; }}
+QTabWidget#pestanas QTabBar {{ background: {t['barra']}; border-bottom: 1px solid {t['borde']}; }}
+QTabWidget#pestanas QTabBar::tab {{ background: transparent; color: {t['texto_sub']}; border: none;
+    border-bottom: 3px solid transparent; padding: 11px 20px 9px 20px; margin-left: 6px;
+    font-weight: 700; letter-spacing: 1px; font-size: 12px; }}
+QTabWidget#pestanas QTabBar::tab:hover {{ color: {t['texto']}; }}
+QTabWidget#pestanas QTabBar::tab:selected {{ color: {t['texto']}; border-bottom: 3px solid {t['rojo']}; }}
 QLabel#antetitulo {{ color: {t['acento']}; font-size: 11px; font-weight: 700; letter-spacing: 1.5px; }}
 QLabel#titulo {{ font-family: {FUENTE_TITULOS}; font-size: 18px; font-weight: 700; }}
 QLabel#appTitulo {{ font-family: {FUENTE_TITULOS}; font-size: 20px; font-weight: 700; }}
@@ -401,7 +420,7 @@ class Ventana(QMainWindow):
         super().__init__()
         self.setWindowTitle("Procesamiento OCR")
         self.setWindowIcon(QIcon(str(ICONO)))
-        self.resize(980, 900)
+        self.resize(1080, 940)
         self.ajustes = QSettings("TechnoMart", "ProcesamientoOCR")
 
         self.codigos_csv = None
@@ -418,30 +437,42 @@ class Ventana(QMainWindow):
         self.paginas = {}          # libro -> páginas (para el avance del OCR)
         self.resultados_txt = None
 
-        cont = QWidget(objectName="contenido")
-        self.col = QVBoxLayout(cont)
-        self.col.setContentsMargins(22, 18, 22, 22)
-        self.col.setSpacing(12)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setWidget(cont)
-
-        # Barra con el logo fija arriba (no se desplaza) y debajo las tarjetas
+        # Barra con el logo fija arriba y debajo las pestañas (como en un navegador)
         raiz = QWidget(objectName="contenido")
         v = QVBoxLayout(raiz)
         v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(0)
         v.addWidget(self._cabecera())
-        v.addWidget(scroll, 1)
+        self.tabs = QTabWidget(objectName="pestanas")
+        self.tabs.setDocumentMode(True)
+        v.addWidget(self.tabs, 1)
         self.setCentralWidget(raiz)
 
+        self.col = self._pestana("PROCESAMIENTO")
         self._seccion_configuracion()
         self._seccion_libros()
         self._seccion_proceso()
         self._seccion_resultados()
         self.col.addStretch()
+
+        self.col = self._pestana("MARCAS DE AGUA")
+        self._seccion_marcas()
+        self.col.addStretch()
+
+        self.col = self._pestana("CARPETAS DE TRABAJO")
+        self._seccion_carpetas()
+        self.col.addStretch()
+
+        self.col = self._pestana("COMPONENTES")
+        self._seccion_componentes()
+        self.col.addStretch()
+
+        self.col = self._pestana("INYECTAR METADATOS")
+        self._seccion_metadatos()
+        self.col.addStretch()
+
+        self.tabs.setCurrentIndex(int(self.ajustes.value("pestana", 0)))
+        self.tabs.currentChanged.connect(lambda i: self.ajustes.setValue("pestana", i))
 
         self.escaner = Escaner()
         self.escaner.listo.connect(self._mostrar_libros)
@@ -456,8 +487,23 @@ class Ventana(QMainWindow):
 
     # ── Construcción ────────────────────────────────────────────────────────
 
+    def _pestana(self, nombre):
+        """Pestaña desplazable; devuelve el layout donde se apilan sus tarjetas."""
+        cont = QWidget(objectName="contenido")
+        col = QVBoxLayout(cont)
+        col.setContentsMargins(22, 18, 22, 22)
+        col.setSpacing(12)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setWidget(cont)
+        self.tabs.addTab(scroll, nombre)
+        return col
+
     def _card(self, paso, titulo):
-        """Tarjeta con el encabezado de la web: línea roja + antetítulo + título."""
+        """Tarjeta con el encabezado de la web: línea roja + antetítulo + título.
+        paso: número de paso ('PASO 2') o un antetítulo libre."""
         card = QFrame(objectName="card")
         lay = QVBoxLayout(card)
         lay.setContentsMargins(22, 16, 22, 18)
@@ -470,7 +516,7 @@ class Ventana(QMainWindow):
         linea = QFrame(objectName="lineaRoja")
         linea.setFixedSize(22, 3)
         ante.addWidget(linea, 0, Qt.AlignVCenter)
-        ante.addWidget(QLabel(f"PASO {paso}", objectName="antetitulo"))
+        ante.addWidget(QLabel(f"PASO {paso}" if isinstance(paso, int) else paso, objectName="antetitulo"))
         ante.addStretch()
         textos.addLayout(ante)
         textos.addWidget(QLabel(titulo, objectName="titulo"))
@@ -538,76 +584,21 @@ class Ventana(QMainWindow):
         grid = QGridLayout()
         grid.setHorizontalSpacing(12)
         grid.addWidget(QLabel("CSV de metadatos", objectName="sub"), 0, 0)
-        grid.addWidget(QLabel("Logo de la marca de agua", objectName="sub"), 0, 1)
         caja, _, self.csv_nombre, self.csv_detalle, b = self._selector("CSV")
         b.clicked.connect(self.elegir_csv)
         self.csv_detalle.linkActivated.connect(
             lambda _: QMessageBox.information(self, "Avisos del CSV", "\n".join(self.avisos_csv)))
         grid.addWidget(caja, 1, 0)
-        caja, self.logo_img, self.logo_nombre, self.logo_detalle, b = self._selector("Logo")
-        b.clicked.connect(self.elegir_logo)
-        grid.addWidget(caja, 1, 1)
-
-        # Texto que acompaña al logo, al pie de cada página: se elige de TEXTOS_MARCA
-        grid.addWidget(QLabel("Texto de la marca de agua", objectName="sub"), 0, 2)
-        caja_txt = QFrame(objectName="selector")
-        ht = QVBoxLayout(caja_txt)
-        ht.setContentsMargins(10, 8, 10, 8)
-        ht.setSpacing(2)
-        self.texto_marca = QComboBox()
-        self.texto_marca.addItems(TEXTOS_MARCA)
-        # Un texto largo no debe ensanchar la ventana: el combo usa solo su columna
-        self.texto_marca.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
-        self.texto_marca.setMinimumContentsLength(18)
-        self.texto_marca.currentTextChanged.connect(self.texto_marca.setToolTip)
-        self.texto_marca.setToolTip(self.texto_marca.currentText())
-        ht.addWidget(self.texto_marca)
-        ht.addWidget(QLabel("Se estampa al pie de cada página", objectName="sub"))
-        grid.addWidget(caja_txt, 1, 2)
-        for c in range(3):
-            grid.setColumnStretch(c, 1)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
         lay.addLayout(grid)
 
-        # ── Carpetas de trabajo ──
-        bloque = QFrame(objectName="selector")
-        gc = QGridLayout(bloque)
-        gc.setContentsMargins(14, 10, 14, 12)
-        gc.setHorizontalSpacing(10)
-        gc.setVerticalSpacing(6)
-        cab_c = QHBoxLayout()
-        cab_c.addWidget(QLabel("Carpetas de trabajo", objectName="subtitulo"))
-        cab_c.addStretch()
-        self.btn_carpetas_def = QPushButton(f"Usar {DATOS_DIR}")
-        self.btn_carpetas_def.clicked.connect(self.carpetas_por_defecto)
-        cab_c.addWidget(self.btn_carpetas_def)
-        gc.addLayout(cab_c, 0, 0, 1, 3)
-        self.campo_carpeta = {}
-        self.boton_carpeta = {}
-        self.botones_carpeta = []
-        for fila_c, (clave, nombre, _, ayuda) in enumerate(CARPETAS, 1):
-            etiqueta = QLabel(nombre)
-            etiqueta.setStyleSheet("font-weight:700;")
-            etiqueta.setToolTip(ayuda)
-            etiqueta.setMinimumWidth(96)
-            gc.addWidget(etiqueta, fila_c, 0)
-            campo = QLineEdit(readOnly=True)
-            campo.setToolTip(ayuda)
-            gc.addWidget(campo, fila_c, 1)
-            b = QPushButton("Elegir…")
-            b.clicked.connect(lambda _=False, c=clave, n=nombre: self.elegir_carpeta(c, n))
-            gc.addWidget(b, fila_c, 2)
-            self.campo_carpeta[clave] = campo
-            self.boton_carpeta[clave] = b
-            self.botones_carpeta.append(b)
-        gc.setColumnStretch(1, 1)
-        self.nota_internas = QLabel(objectName="sub")
-        self.nota_internas.setWordWrap(True)
-        gc.addWidget(self.nota_internas, len(CARPETAS) + 1, 0, 1, 3)
-        self.aviso_carpetas = QLabel(objectName="aviso")
-        self.aviso_carpetas.setWordWrap(True)
-        gc.addWidget(self.aviso_carpetas, len(CARPETAS) + 2, 0, 1, 3)
-        lay.addWidget(bloque)
+        # Lo que se usará al procesar; se ajusta en la pestaña COMPONENTES
+        self.resumen_rend = QLabel(objectName="sub")
+        lay.addWidget(self.resumen_rend)
 
+    def _seccion_componentes(self):
+        lay, _ = self._card("COMPONENTES", "Equipo donde se procesa")
         # ── Equipo: con estos datos se calcula la configuración más rápida ──
         equipo = QFrame(objectName="selector")
         ge = QGridLayout(equipo)
@@ -665,6 +656,209 @@ class Ventana(QMainWindow):
         self.gpu.currentTextChanged.connect(self._equipo_cambiado)
         self.ocr_slider.valueChanged.connect(self._marcar_personalizado)
         self.jobs.valueChanged.connect(self._marcar_personalizado)
+
+    def _seccion_marcas(self):
+        lay, _ = self._card("MARCAS DE AGUA", "Logo, texto al pie y marca diagonal")
+        self._bloque_marca(lay)
+
+    def _seccion_carpetas(self):
+        lay, _ = self._card("CARPETAS DE TRABAJO", "Dónde se leen y se dejan los libros")
+        bloque = QFrame(objectName="selector")
+        gc = QGridLayout(bloque)
+        gc.setContentsMargins(14, 10, 14, 12)
+        gc.setHorizontalSpacing(10)
+        gc.setVerticalSpacing(6)
+        cab_c = QHBoxLayout()
+        cab_c.addWidget(QLabel("Carpetas de trabajo", objectName="subtitulo"))
+        cab_c.addStretch()
+        self.btn_carpetas_def = QPushButton(f"Usar {DATOS_DIR}")
+        self.btn_carpetas_def.clicked.connect(self.carpetas_por_defecto)
+        cab_c.addWidget(self.btn_carpetas_def)
+        gc.addLayout(cab_c, 0, 0, 1, 3)
+        self.campo_carpeta = {}
+        self.boton_carpeta = {}
+        self.botones_carpeta = []
+        for fila_c, (clave, nombre, _, ayuda) in enumerate(CARPETAS, 1):
+            etiqueta = QLabel(nombre)
+            etiqueta.setStyleSheet("font-weight:700;")
+            etiqueta.setToolTip(ayuda)
+            etiqueta.setMinimumWidth(96)
+            gc.addWidget(etiqueta, fila_c, 0)
+            campo = QLineEdit(readOnly=True)
+            campo.setToolTip(ayuda)
+            gc.addWidget(campo, fila_c, 1)
+            b = QPushButton("Elegir…")
+            b.clicked.connect(lambda _=False, c=clave, n=nombre: self.elegir_carpeta(c, n))
+            gc.addWidget(b, fila_c, 2)
+            self.campo_carpeta[clave] = campo
+            self.boton_carpeta[clave] = b
+            self.botones_carpeta.append(b)
+        gc.setColumnStretch(1, 1)
+        self.nota_internas = QLabel(objectName="sub")
+        self.nota_internas.setWordWrap(True)
+        gc.addWidget(self.nota_internas, len(CARPETAS) + 1, 0, 1, 3)
+        self.aviso_carpetas = QLabel(objectName="aviso")
+        self.aviso_carpetas.setWordWrap(True)
+        gc.addWidget(self.aviso_carpetas, len(CARPETAS) + 2, 0, 1, 3)
+        lay.addWidget(bloque)
+
+    def _seccion_metadatos(self):
+        # Vacía por ahora: los metadatos se aplican en el procesamiento principal,
+        # con el CSV elegido en la pestaña PROCESAMIENTO
+        lay, _ = self._card("INYECTAR METADATOS", "Inyectar metadatos")
+        lay.addWidget(QLabel("Esta sección está en construcción.", objectName="sub"))
+
+    def _bloque_marca(self, lay):
+        """Logo, texto al pie y marca diagonal: cada uno con posición, transparencia
+        y tamaño propios, y una vista previa que usa los mismos cálculos que el PDF."""
+        bloque = QFrame(objectName="selector")
+        h = QHBoxLayout(bloque)
+        h.setContentsMargins(14, 10, 14, 12)
+        h.setSpacing(18)
+
+        izq = QVBoxLayout()
+        izq.setSpacing(8)
+        cab = QHBoxLayout()
+        cab.addWidget(QLabel("Marca de agua", objectName="subtitulo"))
+        cab.addStretch()
+        self.btn_marca_def = QPushButton("Restablecer predeterminados")
+        self.btn_marca_def.clicked.connect(self.marca_predeterminada)
+        cab.addWidget(self.btn_marca_def)
+        izq.addLayout(cab)
+
+        cols = QGridLayout()
+        cols.setHorizontalSpacing(14)
+        cols.setVerticalSpacing(4)
+        self.marca_ctrl = {}
+
+        # Encabezado de cada columna: el elemento en sí
+        cols.addWidget(QLabel("Logo", objectName="subtitulo"), 0, 0)
+        caja, self.logo_img, self.logo_nombre, self.logo_detalle, b = self._selector("Logo")
+        b.clicked.connect(self.elegir_logo)
+        cols.addWidget(caja, 1, 0)
+
+        cols.addWidget(QLabel("Texto al pie", objectName="subtitulo"), 0, 1)
+        caja_txt = QFrame(objectName="selector")
+        ht = QVBoxLayout(caja_txt)
+        ht.setContentsMargins(10, 8, 10, 8)
+        self.texto_marca = QComboBox()
+        self.texto_marca.addItems(TEXTOS_MARCA)
+        # Un texto largo no debe ensanchar la ventana: el combo usa solo su columna
+        self.texto_marca.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.texto_marca.setMinimumContentsLength(8)
+        self.texto_marca.currentTextChanged.connect(self.texto_marca.setToolTip)
+        self.texto_marca.setToolTip(self.texto_marca.currentText())
+        ht.addWidget(self.texto_marca)
+        cols.addWidget(caja_txt, 1, 1)
+
+        cols.addWidget(QLabel("Marca diagonal", objectName="subtitulo"), 0, 2)
+        caja_diag = QFrame(objectName="selector")
+        hd = QVBoxLayout(caja_diag)
+        hd.setContentsMargins(10, 8, 10, 8)
+        self.diagonal = QCheckBox(f"«{MARCA_DIAGONAL}»")
+        self.diagonal.setToolTip("Opcional: texto grande y tenue, en diagonal de abajo-izquierda\n"
+                                 "a arriba-derecha, en todas las páginas.")
+        hd.addWidget(self.diagonal)
+        cols.addWidget(caja_diag, 1, 2)
+
+        # Controles: posición, transparencia y tamaño de cada elemento
+        for col, (elem, unidad, explica, minimo, maximo) in enumerate(
+                [("logo", "%", "% del ancho", 5, 60), ("texto", "pt", "pt", 4, 48),
+                 ("diagonal", "%", "% de la diagonal", 20, 100)]):
+            cols.addWidget(QLabel("Posición", objectName="sub"), 2, col)
+            pos = QComboBox()
+            for p in MA.POSICIONES:
+                pos.addItem(p.replace("-", " ").capitalize(), p)
+            cols.addWidget(pos, 3, col)
+
+            cols.addWidget(QLabel("Transparencia", objectName="sub"), 4, col)
+            trans = QSpinBox(minimum=0, maximum=100, suffix=" %")
+            trans.setToolTip("0 % = totalmente opaco · 100 % = invisible")
+            cols.addWidget(trans, 5, col)
+
+            cols.addWidget(QLabel(f"Tamaño ({explica})", objectName="sub"), 6, col)
+            tam = QSpinBox(minimum=minimo, maximum=maximo, suffix=f" {unidad}")
+            cols.addWidget(tam, 7, col)
+
+            for w, senal in ((pos, pos.currentIndexChanged), (trans, trans.valueChanged), (tam, tam.valueChanged)):
+                senal.connect(self._marca_cambiada)
+            self.marca_ctrl[elem] = {"pos": pos, "trans": trans, "tam": tam}
+            cols.setColumnStretch(col, 1)
+        izq.addLayout(cols)
+        h.addLayout(izq, 1)
+
+        der = QVBoxLayout()
+        der.setSpacing(4)
+        der.addWidget(QLabel("Vista previa", objectName="subtitulo"))
+        self.preview = QLabel()
+        self.preview.setFixedSize(PREVIEW_W, PREVIEW_H)
+        self.preview.setAlignment(Qt.AlignCenter)
+        self.preview.setStyleSheet("background:#ffffff;border:1px solid #b9cbe0;")
+        der.addWidget(self.preview)
+        der.addWidget(QLabel("Página A4 de ejemplo", objectName="sub"))
+        der.addStretch()
+        h.addLayout(der)
+
+        self.diagonal.toggled.connect(self._marca_cambiada)
+        self.texto_marca.currentIndexChanged.connect(self._marca_cambiada)
+        self.timer_preview = QTimer(self, singleShot=True, interval=150, timeout=self._pintar_preview)
+        lay.addWidget(bloque)
+
+    # ── Marca de agua ──────────────────────────────────────────────────────
+
+    def _config_marca(self):
+        """Posición, opacidad y tamaño de cada elemento, en el formato de marca_agua.py."""
+        cfg = {}
+        for elem, c in self.marca_ctrl.items():
+            tam = c["tam"].value()
+            cfg[elem] = {
+                "posicion": c["pos"].currentData(),
+                "opacidad": round(1 - c["trans"].value() / 100, 2),
+                "tamano": tam if elem == "texto" else round(tam / 100, 2),
+            }
+        return cfg
+
+    def _poner_marca(self, cfg):
+        cfg = MA.combinar(cfg)
+        self._aplicando = True
+        for elem, c in self.marca_ctrl.items():
+            v = cfg[elem]
+            c["pos"].setCurrentIndex(max(c["pos"].findData(v["posicion"]), 0))
+            c["trans"].setValue(round((1 - v["opacidad"]) * 100))
+            c["tam"].setValue(round(v["tamano"]) if elem == "texto" else round(v["tamano"] * 100))
+        self._aplicando = False
+        self._marca_cambiada()
+
+    def marca_predeterminada(self):
+        self._poner_marca({})
+
+    def _marca_cambiada(self, *_):
+        if self._aplicando:
+            return
+        activa = self.diagonal.isChecked() and self.btn_iniciar.isEnabled()
+        for w in self.marca_ctrl["diagonal"].values():
+            w.setEnabled(activa)
+        self.ajustes.setValue("marca_config", json.dumps(self._config_marca()))
+        self.ajustes.setValue("diagonal", "true" if self.diagonal.isChecked() else "false")
+        self.timer_preview.start()
+
+    def _pintar_preview(self):
+        cfg = MA.combinar(self._config_marca())
+        cfg["texto"]["texto"] = self.texto_marca.currentText()
+        cfg["diagonal"]["texto"] = MARCA_DIAGONAL if self.diagonal.isChecked() else ""
+        try:
+            datos = MA.vista_previa(cfg, self.logo_ruta)
+        except Exception as e:      # un logo dañado no debe tumbar la interfaz
+            self.preview.setText(f"Sin vista previa:\n{e}")
+            return
+        buf = QBuffer(self)
+        buf.setData(QByteArray(datos))
+        buf.open(QIODevice.ReadOnly)
+        doc = QPdfDocument(self)
+        doc.load(buf)
+        self.preview.setPixmap(QPixmap.fromImage(doc.render(0, QSize(PREVIEW_W - 2, PREVIEW_H - 2))))
+        doc.close()
+        buf.close()
 
     def _seccion_libros(self):
         lay, fila = self._card(2, "Libros a procesar")
@@ -788,6 +982,17 @@ class Ventana(QMainWindow):
         indice = self.texto_marca.findText(self.ajustes.value("texto_marca", ""))
         self.texto_marca.setCurrentIndex(max(indice, 0))
 
+        # Marca de agua: se lee todo antes de tocar controles (cada cambio guarda)
+        try:
+            marca = json.loads(self.ajustes.value("marca_config", "{}") or "{}")
+        except ValueError:
+            marca = {}
+        diagonal = self.ajustes.value("diagonal", "false") == "true"
+        self._aplicando = True
+        self.diagonal.setChecked(diagonal)
+        self._aplicando = False
+        self._poner_marca(marca)
+
         # Equipo: lo guardado o, la primera vez, lo que se detecte
         self._aplicando = True
         if self.ajustes.value("ram"):
@@ -898,7 +1103,11 @@ class Ventana(QMainWindow):
         if self._aplicando:
             return
         ocr, libros, explicacion = recomendar(self.ram.value(), self.hilos.value(), self.gpu.currentText())
-        if (self.ocr_slider.value(), self.jobs.value()) == (ocr, libros):
+        recomendada = (self.ocr_slider.value(), self.jobs.value()) == (ocr, libros)
+        self.resumen_rend.setText(
+            f"Rendimiento: {self.ocr_slider.value()} procesos de OCR · {self.jobs.value()} libro(s) en paralelo "
+            f"({'recomendado' if recomendada else 'personalizado'}; se ajusta en la pestaña COMPONENTES)")
+        if recomendada:
             self.recomendacion.setText(f"✓ Configuración recomendada para este equipo. {explicacion}")
             self.btn_recomendado.setEnabled(False)
         else:
@@ -970,6 +1179,7 @@ class Ventana(QMainWindow):
         self.logo_img.setPixmap(pix.scaled(56, 36, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         self.logo_nombre.setText(Path(ruta).name)
         self.logo_detalle.setText(f"{pix.width()} × {pix.height()} px")
+        self.timer_preview.start()
 
     def refrescar_libros(self):
         self.libros_titulo.setText("Libros en INPUT (leyendo…)")
@@ -1056,11 +1266,11 @@ class Ventana(QMainWindow):
         if self.codigos_csv is None:
             faltan.append("el CSV de metadatos")
         if not self.logo_ruta:
-            faltan.append("el logo")
+            faltan.append("el logo (pestaña MARCAS DE AGUA)")
         if not seleccion:
             faltan.append("al menos un libro")
         if not self.carpetas["input"].is_dir():
-            faltan.append("una carpeta INPUT que exista")
+            faltan.append("una carpeta INPUT que exista (pestaña CARPETAS DE TRABAJO)")
         if faltan:
             self.aviso.setText("Falta elegir " + ", ".join(faltan) + ".")
             return
@@ -1085,6 +1295,11 @@ class Ventana(QMainWindow):
             args.append("--png")
         self.ajustes.setValue("texto_marca", self.texto_marca.currentText())
         args += ["--texto-marca", self.texto_marca.currentText()]
+        if self.diagonal.isChecked():
+            args += ["--marca-diagonal", MARCA_DIAGONAL]
+        MARCA_JSON.parent.mkdir(parents=True, exist_ok=True)
+        MARCA_JSON.write_text(json.dumps(self._config_marca(), indent=2), encoding="utf-8")
+        args += ["--marca-config", str(MARCA_JSON)]
         for clave, _, opcion, *_ in [*CARPETAS, *CARPETAS_INTERNAS]:
             args += [opcion, str(self.carpetas[clave])]
         for libro in seleccion:
@@ -1117,9 +1332,11 @@ class Ventana(QMainWindow):
         self.btn_detener.setEnabled(si)
         for w in (self.tabla, self.ocr_slider, self.jobs, self.png, self.ram, self.hilos,
                   self.gpu, self.btn_recomendado, self.btn_carpetas_def, *self.botones_carpeta,
-                  self.texto_marca):
+                  self.texto_marca, self.diagonal, self.btn_marca_def,
+                  *(w for c in self.marca_ctrl.values() for w in c.values())):
             w.setEnabled(not si)
         self._activar_png()
+        self._marca_cambiada()
         if not si:
             self._marcar_personalizado()
         tipo_pill(self.estado_general, "Procesando…" if si else "Listo para procesar", "info" if si else "ok")
