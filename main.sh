@@ -72,6 +72,15 @@ PARALLEL_JOBS=1   # Libros en post-proceso simultáneo (pasos 3-7). Usar con --j
 EXPORT_PNG=false
 PNG_DPI=300
 
+# Libros elegidos con --book (repetible; lo usa la interfaz) y procesos de
+# Tesseract en paralelo (--ocr-jobs; vacío = valor por defecto de OCR.sh)
+declare -a BOOKS=()
+OCR_JOBS=""
+
+# Texto de la marca de agua, al pie de cada página junto al logo (--texto-marca;
+# vacío = solo el logo)
+WATERMARK_TEXT="CONGRESO DE LA REPÚBLICA - REPOSITORIO CÁMARA DE REPRESENTANTES"
+
 # Libro actualmente en proceso — usado por el trap para liberarlo si se interrumpe
 CURRENT_BOOK=""
 
@@ -110,7 +119,8 @@ load_results() {
 # 1. LOGGING
 # ─────────────────────────────────────────────────────────────────────────────
 
-mkdir -p "$LOG_DIR" "$OUTPUT_DIR" "$TEMP_DIR" "$REVIEW_DIR" "$REGISTRO_DIR"
+# Las carpetas de datos se crean en main(), cuando ya se leyeron --input-dir y demás
+mkdir -p "$LOG_DIR"
 touch "$MAIN_LOG"
 
 _log() {
@@ -391,7 +401,7 @@ step3_watermark() {
     log_info "[${book_name}] Aplicando marca de agua (optimizada)..."
 
     # Rutas por variables de entorno (heredoc entre comillas: bash no toca el código)
-    LOGO_PATH="$LOGO_PNG" IN_PDF="$book_pdf" OUT_PDF="$tmp_pdf" python3 - <<'PYEOF'
+    LOGO_PATH="$LOGO_PNG" IN_PDF="$book_pdf" OUT_PDF="$tmp_pdf" WM_TEXT="$WATERMARK_TEXT" python3 - <<'PYEOF'
 import os
 import sys
 from io import BytesIO
@@ -405,7 +415,7 @@ in_path   = os.environ["IN_PDF"]
 out_path  = os.environ["OUT_PDF"]
 
 CM_TO_POINTS     = 72 / 2.54
-WATERMARK_TEXT   = "CONGRESO DE LA REPÚBLICA - REPOSITORIO CÁMARA DE REPRESENTANTES"
+WATERMARK_TEXT   = os.environ.get("WM_TEXT", "").strip()   # vacío = solo el logo
 TEXT_OPACITY     = 0.20
 LOGO_OPACITY     = 0.25
 
@@ -460,14 +470,15 @@ def make_wm_page(pw, ph):
     c = canvas.Canvas(pkt, pagesize=(pw, ph))
 
     # ── Texto inferior: encoger la fuente para que SIEMPRE quepa (nunca se corta)
-    avail = pw - 2 * margin_x
-    tw = c.stringWidth(WATERMARK_TEXT, "Helvetica", TEXT_MAX_SIZE)
-    font_size = TEXT_MAX_SIZE if tw <= avail else (TEXT_MAX_SIZE * avail / tw)
-    c.saveState()
-    c.setFillAlpha(TEXT_OPACITY)
-    c.setFont("Helvetica", font_size)
-    c.drawString(margin_x, text_y, WATERMARK_TEXT)
-    c.restoreState()
+    if WATERMARK_TEXT:
+        avail = pw - 2 * margin_x
+        tw = c.stringWidth(WATERMARK_TEXT, "Helvetica", TEXT_MAX_SIZE)
+        font_size = TEXT_MAX_SIZE if tw <= avail else (TEXT_MAX_SIZE * avail / tw)
+        c.saveState()
+        c.setFillAlpha(TEXT_OPACITY)
+        c.setFont("Helvetica", font_size)
+        c.drawString(margin_x, text_y, WATERMARK_TEXT)
+        c.restoreState()
 
     # ── Logo arriba-izquierda
     c.saveState()
@@ -918,6 +929,20 @@ usage() {
                         /mnt/datos/PNG/<libro>/. Solo para libros puntuales; no
                         interfiere con el procesamiento normal. Requiere los TIFF
                         en INPUT. Úsalo junto con --only-book.
+    --book <id>         Procesa ese libro; se puede repetir (lo usa la interfaz).
+    --csv <ruta>        CSV de metadatos (default: junto a main.sh).
+    --logo <ruta>       Logo de la marca de agua (default: logo.png junto a main.sh).
+    --ocr-jobs <N>      Procesos de Tesseract en paralelo (default: el de OCR.sh).
+    --texto-marca <txt> Texto de la marca de agua al pie de página ("" = solo logo).
+                        Default: CONGRESO DE LA REPÚBLICA - REPOSITORIO CÁMARA DE REPRESENTANTES
+    --input-dir <ruta>     Carpeta INPUT       (default: /mnt/datos/INPUT)
+    --output-dir <ruta>    Carpeta OUTPUT      (default: /mnt/datos/OUTPUT)
+    --temp-dir <ruta>      Carpeta TEMPORALES  (default: /mnt/datos/TEMPORALES)
+    --review-dir <ruta>    Carpeta REVIEW      (default: /mnt/datos/REVIEW)
+    --registro-dir <ruta>  Carpeta REGISTRO    (default: /mnt/datos/REGISTRO)
+    --png-dir <ruta>       Carpeta de PNG      (default: /mnt/datos/PNG)
+                        Conviene que TEMPORALES y OUTPUT (e INPUT y REVIEW) estén
+                        en el mismo disco: así mover el PDF final es instantáneo.
     -h, --help          Muestra esta ayuda.
 
   FLUJO COMPLETO:
@@ -957,13 +982,28 @@ parse_args() {
             --only-book)        ONLY_BOOK="$2"; shift 2 ;;
             --jobs)             PARALLEL_JOBS="$2"; shift 2 ;;
             --png)              EXPORT_PNG=true; shift ;;
+            --book)             BOOKS+=("$2"); shift 2 ;;
+            --csv)              CSV_META="$2"; shift 2 ;;
+            --logo)             LOGO_PNG="$2"; shift 2 ;;
+            --ocr-jobs)         OCR_JOBS="$2"; shift 2 ;;
+            --texto-marca)      WATERMARK_TEXT="$2"; shift 2 ;;
+            --input-dir)        INPUT_DIR="$2"; shift 2 ;;
+            --output-dir)       OUTPUT_DIR="$2"; shift 2 ;;
+            --temp-dir)         TEMP_DIR="$2"; shift 2 ;;
+            --review-dir)       REVIEW_DIR="$2"; shift 2 ;;
+            --registro-dir)     REGISTRO_DIR="$2"; shift 2 ;;
+            --png-dir)          PNG_DIR="$2"; shift 2 ;;
             -h|--help)          usage; exit 0 ;;
             *) log_error "Argumento desconocido: $1"; usage; exit 1 ;;
         esac
     done
-    # Validar --jobs
+    # Validar --jobs y --ocr-jobs
     if ! [[ "$PARALLEL_JOBS" =~ ^[1-9][0-9]*$ ]]; then
         log_error "--jobs requiere un número entero positivo (recibido: '$PARALLEL_JOBS')"
+        exit 1
+    fi
+    if [[ -n "$OCR_JOBS" ]] && ! [[ "$OCR_JOBS" =~ ^[1-9][0-9]*$ ]]; then
+        log_error "--ocr-jobs requiere un número entero positivo (recibido: '$OCR_JOBS')"
         exit 1
     fi
 }
@@ -974,6 +1014,16 @@ parse_args() {
 
 main() {
     parse_args "$@"
+
+    # Rutas que dependen de las carpetas (pueden venir de --review-dir, --registro-dir…)
+    REGISTRO_CSV="${REGISTRO_DIR}/registro_libros_procesados.csv"
+    REVIEW_LOG="${REVIEW_DIR}/review_log.csv"
+    if [[ ! -d "$INPUT_DIR" ]]; then
+        log_error "No existe la carpeta INPUT: $INPUT_DIR"
+        exit 1
+    fi
+    mkdir -p "$OUTPUT_DIR" "$TEMP_DIR" "$REVIEW_DIR" "$REGISTRO_DIR"
+    log_info "Carpetas: INPUT=$INPUT_DIR | OUTPUT=$OUTPUT_DIR | TEMPORALES=$TEMP_DIR | REVIEW=$REVIEW_DIR | REGISTRO=$REGISTRO_DIR"
 
     echo ""
     echo "╔══════════════════════════════════════════════════════════════╗"
@@ -991,10 +1041,19 @@ main() {
     # ── PASO 1: Renombrar ──
     step1_rename_input
 
+    log_info "Resultados de esta ejecución: ${RESULTS_FILE}"
+
     # ── Descubrir libros a procesar (desde INPUT_DIR) ──
     local book_list=()
     if [[ -n "$ONLY_BOOK" ]]; then
         book_list=("$ONLY_BOOK")
+    elif [[ ${#BOOKS[@]} -gt 0 ]]; then
+        # --book (interfaz): mismo recorte de " OK" que hizo el paso 1
+        local b
+        for b in "${BOOKS[@]}"; do
+            b="${b%[[:space:]][Oo][Kk]}"
+            book_list+=("${b%"${b##*[![:space:]]}"}")
+        done
     else
         while IFS= read -r d; do
             if [[ -d "$d" ]]; then
@@ -1068,15 +1127,17 @@ main() {
         log_step "=========================================================="
 
         local book_pdf="${TEMP_DIR}/${book}/${book}_ocr.pdf"
+        local -a ocr_args=(-i "${INPUT_DIR}/${book}" -o "$TEMP_DIR")
+        if [[ -n "$OCR_JOBS" ]]; then ocr_args+=(-j "$OCR_JOBS"); fi
         if [[ "$SKIP_OCR" != "true" ]]; then
             log_step "  -> [1/2] Ejecutando Fase OCR..."
-            bash "$RUN_OCR" -i "${INPUT_DIR}/${book}" -o "$TEMP_DIR" 2>&1 | tee -a "$MAIN_LOG" || true
+            bash "$RUN_OCR" "${ocr_args[@]}" 2>&1 | tee -a "$MAIN_LOG" || true
 
             # Un fallo del OCR suele ser pasajero (memoria, un proceso caído):
             # se reintenta una vez. Las páginas ya hechas no se repiten.
             if [[ ! -f "$book_pdf" && ! -f "${INPUT_DIR}/${book}/_book_rejected.json" ]]; then
                 log_warn "[${book}] El OCR no generó el PDF. Reintentando una vez..."
-                bash "$RUN_OCR" -i "${INPUT_DIR}/${book}" -o "$TEMP_DIR" 2>&1 | tee -a "$MAIN_LOG" || true
+                bash "$RUN_OCR" "${ocr_args[@]}" 2>&1 | tee -a "$MAIN_LOG" || true
             fi
         else
             log_info "  -> [1/2] Fase OCR omitida (--skip-ocr activo)."

@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <rect x="8" y="8" width="240" height="240" rx="52" fill="#13233a"/>
+  <path d="M128 78 C104 62 70 58 44 64 V184 C70 178 104 182 128 198 Z" fill="#ffffff"/>
+  <path d="M128 78 C152 62 186 58 212 64 V184 C186 178 152 182 128 198 Z" fill="#dfe7f0"/>
+  <g stroke="#13233a" stroke-width="7" stroke-linecap="round">
+    <line x1="62" y1="92" x2="110" y2="98"/>
+    <line x1="62" y1="114" x2="110" y2="120"/>
+    <line x1="62" y1="136" x2="96" y2="140"/>
+    <line x1="146" y1="98" x2="194" y2="92"/>
+    <line x1="146" y1="120" x2="194" y2="114"/>
+  </g>
+  <circle cx="178" cy="166" r="30" fill="#ffffff" stroke="#c01120" stroke-width="8"/>
+  <line x1="199" y1="187" x2="222" y2="210" stroke="#13233a" stroke-width="16" stroke-linecap="round"/>
+  <line x1="199" y1="187" x2="222" y2="210" stroke="#c01120" stroke-width="8" stroke-linecap="round"/>
+  <text x="178" y="174" font-family="DejaVu Sans, Arial, sans-serif" font-size="22" font-weight="700" fill="#13233a" text-anchor="middle">OCR</text>
+</svg>

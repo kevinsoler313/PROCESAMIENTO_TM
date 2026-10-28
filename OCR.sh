@@ -1016,7 +1016,10 @@ parse_args() {
         case "$1" in
             -i) INPUT_DIR="$2";  shift 2 ;;
             -o) OUTPUT_DIR="$2"; shift 2 ;;
-            -j) PARALLEL_JOBS_CPU="$2"; shift 2 ;;
+            -j) PARALLEL_JOBS_CPU="$2"
+                # Las imágenes grandes nunca usan más procesos que los normales
+                (( PARALLEL_JOBS_LARGE > PARALLEL_JOBS_CPU )) && PARALLEL_JOBS_LARGE="$PARALLEL_JOBS_CPU"
+                shift 2 ;;
             -g) PARALLEL_JOBS_GPU="$2"; shift 2 ;;
             --no-tesseract) USE_TESSERACT=0; shift ;;
             --no-paddle)    USE_PADDLEOCR=0; shift ;;
