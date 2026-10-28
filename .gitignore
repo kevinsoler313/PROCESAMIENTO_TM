@@ -1,0 +1,31 @@
+# Datos del cliente: se seleccionan en la interfaz antes de procesar
+*.csv
+logo.png
+logo.*
+
+# Entorno y archivos generados
+ocr_env/
+__pycache__/
+*.pyc
+logs/
+input/
+output/
+
+# Imágenes y documentos de trabajo
+*.tif
+*.tiff
+*.pdf
+*.png
+*.jpg
+*.jpeg
+
+# Archivos del sistema y de editores
+Thumbs.db
+desktop.ini
+.DS_Store
+.~lock.*#
+*.bak.*
+*.swp
+.vscode/
+.idea/
+.claude/settings.local.json

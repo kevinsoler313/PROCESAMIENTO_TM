@@ -1,0 +1,5 @@
+# Entorno ocr_env (probado con: pypdf 6.21.3, reportlab 5.1.0, pikepdf 10.17.0, pillow 13.0.0)
+pypdf>=4.0
+reportlab>=4.0
+pikepdf>=8.0
+pillow>=10.0
