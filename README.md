@@ -20,7 +20,8 @@ INPUT/<libro>/*.tif
        4. PDF/A-3B con ocrmypdf, cabecera PDF 1.7
        5. Metadatos con exiftool desde el CSV
        6. Verifica: páginas del PDF == número de TIFF
-       7. Mueve el PDF a OUTPUT, lo registra y recién entonces borra los TIFF
+       7. Mueve el PDF a OUTPUT (o a OUTPUT/SIN METADATOS si el libro no
+          está en el CSV), lo registra y recién entonces borra los TIFF
 ```
 
 ## Carpetas de datos (por defecto en `/mnt/datos`)
@@ -28,7 +29,8 @@ INPUT/<libro>/*.tif
 | Carpeta | Contenido |
 |---|---|
 | `INPUT/` | Un subdirectorio de TIFF por libro |
-| `OUTPUT/` | Solo PDFs finalizados y verificados |
+| `OUTPUT/` | Solo PDFs finalizados, verificados y con metadatos |
+| `OUTPUT/SIN METADATOS/` | PDFs de libros que no estaban en el CSV; se completan con `inyectar_metadatos.sh` |
 | `TEMPORALES/` | Intermedios de cada libro; la carpeta del libro es también su candado |
 | `REVIEW/` | Libros rechazados (DPI, corruptos, páginas que no coinciden) y `review_log.csv` |
 | `REGISTRO/` | `registro_libros_procesados.csv` con páginas, pesos, estado y SHA-256 |
@@ -57,10 +59,16 @@ aplicaciones y en el escritorio.
 - **PROCESAMIENTO**
   1. CSV de metadatos y resumen del rendimiento que se usará.
   2. Libros de INPUT con páginas, tamaño y si están en el CSV; se marcan los
-     que se quieren procesar. Exportar PNG es opcional.
+     que se quieren procesar. Un buscador (empieza con, contiene, termina con)
+     filtra la lista, p. ej. "AHFCPC", y "Solo estos" marca solo los que
+     coinciden. Exportar PNG es opcional.
   3. En proceso: avance por libro, CPU, RAM, disco y log en vivo. "Detener"
      equivale a Ctrl+C.
   4. Resultados: exitosos, sin metadatos, en REVIEW y por reintentar.
+- **INYECTAR METADATOS:** lista los PDF de `OUTPUT/SIN METADATOS` y, con un CSV
+  que puede ser distinto al del procesamiento, les escribe los metadatos a los
+  que estén, los pasa a OUTPUT y actualiza el registro a `OK`; avisa cuáles
+  siguen sin aparecer.
 - **MARCAS DE AGUA:** logo, texto al pie y marca diagonal opcional
   («CÁMARA DE REPRESENTANTES»), cada uno con posición, transparencia y tamaño
   propios, y una vista previa que usa el mismo código que estampa los PDF.
@@ -68,7 +76,6 @@ aplicaciones y en el escritorio.
 - **COMPONENTES:** RAM, hilos y gráfica del equipo ("Detectar este equipo" los
   llena). Con ellos calcula la combinación más rápida de procesos de OCR y
   libros en paralelo, que se puede ajustar a mano.
-- **INYECTAR METADATOS:** en construcción.
 
 Tiene modo claro y oscuro, y recuerda la última configuración.
 
@@ -115,6 +122,16 @@ bash main.sh --marca-diagonal "CÁMARA DE REPRESENTANTES" --marca-config marca.j
 
 Todas las opciones: `bash main.sh -h`.
 
+Para los PDF que quedaron en `OUTPUT/SIN METADATOS`:
+
+```bash
+bash inyectar_metadatos.sh --csv otro.csv                      # los que estén en otro.csv
+bash inyectar_metadatos.sh --csv otro.csv --book AR10611       # solo ese libro
+```
+
+`metadatos.sh` reúne la lectura del CSV y la escritura de metadatos; lo usan
+`main.sh` e `inyectar_metadatos.sh`, así que ambos escriben los mismos campos.
+
 Al final se muestra un resumen: exitosos, sin metadatos, en REVIEW, por
 reintentar y omitidos. El detalle queda en `logs/`.
 
@@ -126,5 +143,6 @@ reintentar y omitidos. El detalle queda en `logs/`.
   libro queda en INPUT como "por reintentar".
 - **Imágenes con DPI ≠ 300 o corruptas, o páginas que no coinciden:** el libro
   va a `REVIEW/` con el motivo en `review_log.csv`.
-- **Libro sin entrada en el CSV:** el PDF se entrega igual y se registra como
-  `SIN_META`.
+- **Libro sin entrada en el CSV:** el PDF se entrega igual en
+  `OUTPUT/SIN METADATOS` y se registra como `SIN_META`, hasta que se le
+  inyecten los metadatos.

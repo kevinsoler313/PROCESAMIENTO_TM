@@ -53,6 +53,10 @@ VENV_DIR="${SCRIPT_DIR}/ocr_env"
 RUN_OCR="${SCRIPT_DIR}/run_ocr.sh"
 MARCA_AGUA="${SCRIPT_DIR}/marca_agua.py"
 
+# Lectura del CSV y escritura de metadatos, compartidas con inyectar_metadatos.sh
+# shellcheck source=metadatos.sh
+source "${SCRIPT_DIR}/metadatos.sh" || { echo "Falta ${SCRIPT_DIR}/metadatos.sh" >&2; exit 1; }
+
 # Registro CSV principal (solo libros exitosos)
 REGISTRO_CSV="${REGISTRO_DIR}/registro_libros_procesados.csv"
 # Registro de libros enviados a REVIEW
@@ -286,26 +290,7 @@ check_deps() {
 TEMP_META=""
 load_csv_index() {
     TEMP_META="$(mktemp)"
-    awk -F',' '
-    {
-        # Limpiar espacios en todos los campos relevantes
-        gsub(/\r/, "")
-        gsub(/^[[:space:]]+|[[:space:]]+$/, "", $1)
-        gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2)
-        gsub(/^[[:space:]]+|[[:space:]]+$/, "", $3)
-        gsub(/^[[:space:]]+|[[:space:]]+$/, "", $4)
-        gsub(/^[[:space:]]+|[[:space:]]+$/, "", $5)
-        # Filas con código alfanumérico (p. ej. AHFCP0001) o numérico (legado)
-        if ($1 ~ /^[A-Za-z0-9._-]+$/) {
-            # Guardar en formato: CODIGO|fondo|subfondo|equipo|resolucion
-            printf "%s|%s|%s|%s|%s\n", $1, $2, $3, $4, $5
-            # Códigos puramente numéricos (legado): añadir variante con padding
-            # de 6 dígitos por si las carpetas vienen sin ceros a la izquierda.
-            if ($1 ~ /^[0-9]+$/) {
-                printf "%06d|%s|%s|%s|%s\n", $1, $2, $3, $4, $5
-            }
-        }
-    }' "$CSV_META" | sort -u > "$TEMP_META"
+    meta_indice "$CSV_META" > "$TEMP_META"
 
     [[ -s "$TEMP_META" ]] || { log_error "No se pudo leer el CSV de metadatos."; exit 1; }
     local count; count=$(cut -d'|' -f1 "$TEMP_META" | sort -u | wc -l)
@@ -476,43 +461,21 @@ step5_metadata() {
     local book_name="$1"
     local pdf_path="$2"
 
-    # Buscar metadatos por el código exacto de la carpeta (p. ej. AHFCP0001).
-    # Comparación de campo con awk: evita que el código se interprete como regex.
+    # Metadatos por el código exacto de la carpeta (p. ej. AHFCP0001)
     local meta
-    meta=$(awk -F'|' -v code="$book_name" '$1 == code { print; exit }' "$TEMP_META" 2>/dev/null || true)
-
-    # Compatibilidad con códigos numéricos antiguos sin ceros (3106 → 003106)
-    if [[ -z "$meta" && "$book_name" =~ ^[0-9]+$ ]]; then
-        local padded; padded=$(printf '%06d' "$book_name")
-        meta=$(awk -F'|' -v code="$padded" '$1 == code { print; exit }' "$TEMP_META" 2>/dev/null || true)
-    fi
+    meta=$(meta_buscar "$book_name" "$TEMP_META")
 
     if [[ -z "$meta" ]]; then
-        log_warn "[${book_name}] ⚠ Sin metadatos en CSV — no se modificará el PDF."
+        log_warn "[${book_name}] ⚠ Sin metadatos en CSV — no se modificará el PDF (irá a OUTPUT/${SIN_META_SUBDIR})."
         echo "$book_name" >> "$SIN_META_TXT"
         BOOKS_NO_META+=("$book_name")
         return 0
     fi
 
-    IFS='|' read -r _ fondo subfondo equipo resolucion <<< "$meta"
-
-    # Limpiar espacios residuales
-    subfondo="${subfondo//  / }"
-    equipo="${equipo//  / }"
-
+    local subfondo equipo
+    IFS='|' read -r _ _ subfondo equipo _ <<< "$meta"
     log_info "[${book_name}] Insertando metadatos: Subfondo=$subfondo | Equipo=$equipo"
-
-    exiftool -q -overwrite_original \
-        -Title="$book_name" \
-        -Subject="Congreso de la República - ${subfondo}" \
-        -Keywords="Fondo: ${fondo}, Subfondo: ${subfondo}, Código: ${book_name}, Resolución: ${resolucion}, Equipo: ${equipo}" \
-        -Author="Congreso de la República" \
-        -Creator="$equipo" \
-        -Producer="Sistema de Digitalización - Congreso de la República" \
-        -Description="Documento digitalizado - Código: ${book_name}" \
-        "$pdf_path" 2>/dev/null \
-    && log_ok "[${book_name}] Metadatos insertados." \
-    || log_warn "[${book_name}] Advertencia: exiftool no pudo escribir algunos metadatos."
+    meta_escribir "$book_name" "$pdf_path" "$meta"     && log_ok "[${book_name}] Metadatos insertados."     || log_warn "[${book_name}] Advertencia: exiftool no pudo escribir algunos metadatos."
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -764,23 +727,27 @@ process_book() {
     # y SOLO DESPUÉS se libera el lock (carpeta TEMPORALES/<libro>). Invariante: en
     # todo instante existe el lock O el PDF final — nunca un hueco por el que otra
     # terminal pueda re-procesar un libro ya terminado.
-    local out_pdf="${OUTPUT_DIR}/${book_name}.pdf"
+    # Los libros sin metadatos no se mezclan con los completos: van a
+    # OUTPUT/SIN METADATOS, de donde los toma inyectar_metadatos.sh
+    local book_status="OK" out_dir="$OUTPUT_DIR"
+    for nm in "${BOOKS_NO_META[@]}"; do
+        if [[ "$nm" == "$book_name" ]]; then
+            book_status="SIN_META"
+            out_dir="${OUTPUT_DIR}/${SIN_META_SUBDIR}"
+            break
+        fi
+    done
+    mkdir -p "$out_dir"
+    local out_pdf="${out_dir}/${book_name}.pdf"
     if ! mv "$final_pdf" "$out_pdf"; then
         log_error "[${book_name}] No se pudo mover el PDF final a OUTPUT. Queda en TEMPORALES/${book_name}/; los TIFF siguen en INPUT."
         record_result ERROR "$book_name" "PDF final no se pudo mover a OUTPUT; quedó en TEMPORALES/${book_name}/"
         return 1
     fi
-    log_ok "[${book_name}] PDF final disponible en OUTPUT/${book_name}.pdf"
+    log_ok "[${book_name}] PDF final disponible en ${out_pdf#"${OUTPUT_DIR}/"}"
 
     # ── PASO 7: Registro CSV (solo libros exitosos) ──
     log_step "  [7/7] Registro CSV"
-    local book_status="OK"
-    for nm in "${BOOKS_NO_META[@]}"; do
-        if [[ "$nm" == "$book_name" ]]; then
-            book_status="SIN_META"
-            break
-        fi
-    done
     # Páginas del PDF entregado (el paso 6 ya verificó que coinciden con los TIFF)
     local n_pages
     n_pages=$(pdfinfo "$out_pdf" 2>/dev/null | awk '/^Pages:/{print $2}')
@@ -860,6 +827,8 @@ usage() {
 
   SALIDA:
     OUTPUT/<libro>.pdf                          Solo PDFs finalizados y verificados
+    OUTPUT/SIN METADATOS/<libro>.pdf            Libros sin entrada en el CSV
+                                                (se completan con inyectar_metadatos.sh)
     TEMPORALES/<libro>/                         Intermedios (se borran al terminar)
     REGISTRO/registro_libros_procesados.csv     Registro con SHA-256
     REVIEW/<libro>/                             Libros con error + review_log.csv
@@ -1013,8 +982,7 @@ main() {
 
     for book in "${book_list[@]}"; do
         # Si el PDF final ya existe en OUTPUT, el libro ya fue procesado completamente
-        local final_pdf_check="${OUTPUT_DIR}/${book}.pdf"
-        if [[ -f "$final_pdf_check" ]]; then
+        if [[ -f "${OUTPUT_DIR}/${book}.pdf" || -f "${OUTPUT_DIR}/${SIN_META_SUBDIR}/${book}.pdf" ]]; then
             log_info "[${book}] PDF final ya existe en OUTPUT. Omitiendo (ya completado)."
             record_result OMITIDO "$book"
             continue

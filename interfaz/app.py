@@ -39,6 +39,8 @@ from PySide6.QtWidgets import (
 
 SCRIPT_DIR = Path(__file__).resolve().parent.parent
 MAIN_SH = SCRIPT_DIR / "main.sh"
+INYECTAR_SH = SCRIPT_DIR / "inyectar_metadatos.sh"
+SIN_META_SUBDIR = "SIN METADATOS"     # dentro de OUTPUT; igual que en metadatos.sh
 ICONO = Path(__file__).resolve().parent / "icono.svg"
 MARCA_JSON = SCRIPT_DIR / "logs" / "marca_interfaz.json"   # lo que se pasa a main.sh
 
@@ -362,10 +364,10 @@ class Ejecucion(QObject):
     linea = Signal(str)
     terminado = Signal(int)
 
-    def __init__(self, args):
+    def __init__(self, args, script=None):
         super().__init__()
         self.proc = subprocess.Popen(
-            ["bash", str(MAIN_SH), *args], cwd=SCRIPT_DIR,
+            ["bash", str(script or MAIN_SH), *args], cwd=SCRIPT_DIR,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, encoding="utf-8", errors="replace", bufsize=1,
             start_new_session=True,   # grupo propio: Detener = Ctrl+C a todo el grupo
@@ -455,6 +457,10 @@ class Ventana(QMainWindow):
         self._seccion_resultados()
         self.col.addStretch()
 
+        self.col = self._pestana("INYECTAR METADATOS")
+        self._seccion_metadatos()
+        self.col.addStretch()
+
         self.col = self._pestana("MARCAS DE AGUA")
         self._seccion_marcas()
         self.col.addStretch()
@@ -465,10 +471,6 @@ class Ventana(QMainWindow):
 
         self.col = self._pestana("COMPONENTES")
         self._seccion_componentes()
-        self.col.addStretch()
-
-        self.col = self._pestana("INYECTAR METADATOS")
-        self._seccion_metadatos()
         self.col.addStretch()
 
         self.tabs.setCurrentIndex(int(self.ajustes.value("pestana", 0)))
@@ -703,10 +705,72 @@ class Ventana(QMainWindow):
         lay.addWidget(bloque)
 
     def _seccion_metadatos(self):
-        # Vacía por ahora: los metadatos se aplican en el procesamiento principal,
-        # con el CSV elegido en la pestaña PROCESAMIENTO
-        lay, _ = self._card("INYECTAR METADATOS", "Inyectar metadatos")
-        lay.addWidget(QLabel("Esta sección está en construcción.", objectName="sub"))
+        """PDF que quedaron sin metadatos (OUTPUT/SIN METADATOS) + un CSV, que puede
+        ser distinto al del procesamiento: inyecta los que estén y avisa los que no."""
+        lay, fila = self._card("INYECTAR METADATOS", "PDF sin metadatos")
+        nota = QLabel(f"Los libros que no estaban en el CSV se entregan en OUTPUT/{SIN_META_SUBDIR}. "
+                      "Elige un CSV que los incluya: a los que aparezcan se les escriben los metadatos "
+                      "y pasan a OUTPUT; los demás se quedan y se listan abajo.", objectName="sub")
+        nota.setWordWrap(True)
+        lay.addWidget(nota)
+
+        grid = QGridLayout()
+        grid.addWidget(QLabel("CSV para inyectar", objectName="sub"), 0, 0)
+        caja, _, self.iny_csv_nombre, self.iny_csv_detalle, b = self._selector("CSV")
+        b.clicked.connect(self.elegir_csv_inyectar)
+        grid.addWidget(caja, 1, 0)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
+        lay.addLayout(grid)
+
+        cab = QHBoxLayout()
+        self.iny_titulo = QLabel(objectName="sub")
+        cab.addWidget(self.iny_titulo)
+        cab.addStretch()
+        b = QPushButton("Abrir carpeta")
+        b.clicked.connect(lambda: self.abrir(self.carpetas["output"] / SIN_META_SUBDIR))
+        cab.addWidget(b)
+        b = QPushButton("Actualizar")
+        b.clicked.connect(self.refrescar_sin_meta)
+        cab.addWidget(b)
+        lay.addLayout(cab)
+
+        self.iny_tabla = QTableWidget(0, 3)
+        self.iny_tabla.setHorizontalHeaderLabels(["Libro", "Tamaño", "En el CSV elegido"])
+        self.iny_tabla.verticalHeader().setVisible(False)
+        self.iny_tabla.setSelectionMode(QTableWidget.NoSelection)
+        self.iny_tabla.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.iny_tabla.setFocusPolicy(Qt.NoFocus)
+        h = self.iny_tabla.horizontalHeader()
+        h.setSectionResizeMode(0, QHeaderView.Stretch)
+        h.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        h.setSectionResizeMode(2, QHeaderView.Fixed)
+        self.iny_tabla.setColumnWidth(2, 210)
+        self.iny_tabla.verticalHeader().setDefaultSectionSize(34)
+        self.iny_tabla.setMinimumHeight(200)
+        lay.addWidget(self.iny_tabla)
+
+        abajo = QHBoxLayout()
+        self.iny_aviso = QLabel(objectName="aviso")
+        self.iny_aviso.setWordWrap(True)
+        abajo.addWidget(self.iny_aviso, 1)
+        self.btn_inyectar = QPushButton("Inyectar metadatos", objectName="primario")
+        self.btn_inyectar.clicked.connect(self.inyectar)
+        abajo.addWidget(self.btn_inyectar)
+        lay.addLayout(abajo)
+
+        self.iny_resultado = QLabel()
+        self.iny_resultado.setWordWrap(True)
+        self.iny_resultado.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        lay.addWidget(self.iny_resultado)
+        self.iny_log = QPlainTextEdit(readOnly=True)
+        self.iny_log.setMaximumBlockCount(2000)
+        self.iny_log.setMinimumHeight(120)
+        lay.addWidget(self.iny_log)
+
+        self.iny_codigos = None
+        self.iny_ejecucion = None
+        self.iny_resultados_txt = None
 
     def _bloque_marca(self, lay):
         """Logo, texto al pie y marca diagonal: cada uno con posición, transparencia
@@ -804,6 +868,134 @@ class Ventana(QMainWindow):
         self.timer_preview = QTimer(self, singleShot=True, interval=150, timeout=self._pintar_preview)
         lay.addWidget(bloque)
 
+    # ── Inyectar metadatos ─────────────────────────────────────────────────
+
+    def elegir_csv_inyectar(self):
+        ruta, _ = QFileDialog.getOpenFileName(
+            self, "CSV para inyectar metadatos",
+            self.ajustes.value("csv_inyectar", self.ajustes.value("csv", str(Path.home()))),
+            "CSV (*.csv);;Todos (*)")
+        if ruta:
+            self.cargar_csv_inyectar(ruta)
+
+    def cargar_csv_inyectar(self, ruta):
+        try:
+            codigos, n_codigos, _ = leer_csv(ruta)
+        except OSError as e:
+            QMessageBox.warning(self, "CSV para inyectar", f"No se pudo leer el CSV.\n{e}")
+            return
+        if not codigos:
+            QMessageBox.warning(self, "CSV para inyectar", "El archivo no tiene códigos válidos.")
+            return
+        self.iny_codigos = codigos
+        self.ajustes.setValue("csv_inyectar", ruta)
+        self.iny_csv_nombre.setText(Path(ruta).name)
+        self.iny_csv_detalle.setText(f"{n_codigos:,} códigos".replace(",", "."))
+        self.refrescar_sin_meta()
+
+    def refrescar_sin_meta(self):
+        """Lista los PDF de OUTPUT/SIN METADATOS y si están en el CSV elegido."""
+        carpeta = self.carpetas["output"] / SIN_META_SUBDIR
+        try:
+            pdfs = sorted(p for p in carpeta.iterdir() if p.suffix.lower() == ".pdf")
+        except OSError:
+            pdfs = []
+        self.iny_tabla.setRowCount(0)
+        estan = 0
+        for pdf in pdfs:
+            fila = self.iny_tabla.rowCount()
+            self.iny_tabla.insertRow(fila)
+            self.iny_tabla.setItem(fila, 0, QTableWidgetItem(pdf.stem))
+            peso = QTableWidgetItem(formato_gb(pdf.stat().st_size))
+            peso.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            self.iny_tabla.setItem(fila, 1, peso)
+            if self.iny_codigos is None:
+                estado = pill("Elige el CSV", "gris")
+            elif pdf.stem in self.iny_codigos:
+                estado = pill("Está: se inyectará", "ok")
+                estan += 1
+            else:
+                estado = pill("No está en este CSV", "warn")
+            celda = QWidget()
+            hc = QHBoxLayout(celda)
+            hc.setContentsMargins(6, 4, 6, 4)
+            hc.addWidget(estado)
+            hc.addStretch()
+            self.iny_tabla.setCellWidget(fila, 2, celda)
+        if not pdfs:
+            self.iny_titulo.setText(f"No hay PDF en {carpeta}")
+        elif self.iny_codigos is None:
+            self.iny_titulo.setText(f"{len(pdfs)} PDF sin metadatos")
+        else:
+            self.iny_titulo.setText(f"{len(pdfs)} PDF sin metadatos · {estan} están en el CSV elegido · "
+                                    f"{len(pdfs) - estan} no están")
+        self._estado_inyectar()
+
+    def _estado_inyectar(self):
+        ocupado = bool(self.ejecucion or self.iny_ejecucion)
+        self.btn_inyectar.setEnabled(not ocupado and self.iny_tabla.rowCount() > 0)
+
+    def inyectar(self):
+        if self.ejecucion:
+            self.iny_aviso.setText("Espera a que termine el procesamiento.")
+            return
+        if self.iny_codigos is None:
+            self.iny_aviso.setText("Falta elegir el CSV para inyectar.")
+            return
+        self.iny_aviso.setText("")
+        r = QMessageBox.question(
+            self, "Inyectar metadatos",
+            "A los PDF que estén en el CSV se les escribirán los metadatos y pasarán a OUTPUT; "
+            "el registro se actualiza a OK.\nLos que no estén se quedan en "
+            f"{SIN_META_SUBDIR}.\n¿Continuar?")
+        if r != QMessageBox.Yes:
+            return
+        args = ["--csv", self.ajustes.value("csv_inyectar"),
+                "--output-dir", str(self.carpetas["output"]),
+                "--registro-dir", str(self.carpetas["registro"])]
+        self.iny_log.clear()
+        self.iny_resultado.setText("")
+        self.iny_resultados_txt = None
+        self.iny_ejecucion = Ejecucion(args, INYECTAR_SH)
+        self.iny_ejecucion.linea.connect(self._iny_linea)
+        self.iny_ejecucion.terminado.connect(self._iny_terminado)
+        self.btn_iniciar.setEnabled(False)
+        self._estado_inyectar()
+
+    def _iny_linea(self, texto):
+        self.iny_log.appendPlainText(texto)
+        m = re.search(r"Resultados de esta ejecución: (.+)$", texto)
+        if m:
+            self.iny_resultados_txt = Path(m.group(1).strip())
+
+    def _iny_terminado(self, codigo):
+        self.iny_ejecucion = None
+        self.btn_iniciar.setEnabled(True)
+        ok, falta, error = [], [], []
+        try:
+            lineas = self.iny_resultados_txt.read_text(encoding="utf-8").splitlines()
+        except (OSError, AttributeError):
+            lineas = []
+        for linea in lineas:
+            estado, _, resto = linea.partition("|")
+            libro, _, motivo = resto.partition("|")
+            if estado == "OK":
+                ok.append(libro)
+            elif estado == "FALTA":
+                falta.append(libro)
+            else:
+                error.append(f"{libro} ({motivo})")
+        partes = [f"✓ {len(ok)} con metadatos inyectados (ya están en OUTPUT)."]
+        if falta:
+            partes.append(f"⚠ {len(falta)} siguen sin entrada en el CSV: {', '.join(falta)}")
+        if error:
+            partes.append(f"✗ {len(error)} con error: {', '.join(error)}")
+        if not lineas and codigo != 0:
+            partes = [f"✗ La inyección terminó con error ({codigo}). Revisa el log."]
+        self.iny_resultado.setText("\n".join(partes))
+        self.refrescar_sin_meta()
+        QApplication.alert(self)
+
     # ── Marca de agua ──────────────────────────────────────────────────────
 
     def _config_marca(self):
@@ -863,14 +1055,37 @@ class Ventana(QMainWindow):
     def _seccion_libros(self):
         lay, fila = self._card(2, "Libros a procesar")
 
+        # Búsqueda: muestra solo los libros cuyo nombre coincide (p. ej. "AHFCPC").
+        # Todos / Ninguno actúan sobre los que se ven; "Solo estos" marca los que
+        # coinciden y desmarca el resto.
+        busq = QHBoxLayout()
+        self.buscar = QLineEdit()
+        self.buscar.setPlaceholderText("Buscar libro, p. ej. AHFCPC")
+        self.buscar.setClearButtonEnabled(True)
+        self.buscar.textChanged.connect(self._filtrar_libros)
+        busq.addWidget(self.buscar, 1)
+        self.modo_busqueda = QComboBox()
+        self.modo_busqueda.addItem("Empieza con", "inicio")
+        self.modo_busqueda.addItem("Contiene", "contiene")
+        self.modo_busqueda.addItem("Termina con", "fin")
+        self.modo_busqueda.currentIndexChanged.connect(self._filtrar_libros)
+        busq.addWidget(self.modo_busqueda)
+        self.btn_solo_estos = QPushButton("Solo estos")
+        self.btn_solo_estos.setToolTip("Marca los libros que coinciden con la búsqueda y desmarca los demás")
+        self.btn_solo_estos.clicked.connect(self._solo_coincidentes)
+        busq.addWidget(self.btn_solo_estos)
+        lay.addLayout(busq)
+
         cab = QHBoxLayout()
         self.libros_titulo = QLabel("Libros en INPUT", objectName="sub")
         cab.addWidget(self.libros_titulo)
         cab.addStretch()
         b = QPushButton("Todos")
+        b.setToolTip("Marca los libros que se ven en la lista")
         b.clicked.connect(lambda: self._marcar_todos(True))
         cab.addWidget(b)
         b = QPushButton("Ninguno")
+        b.setToolTip("Desmarca los libros que se ven en la lista")
         b.clicked.connect(lambda: self._marcar_todos(False))
         cab.addWidget(b)
         b = QPushButton("Actualizar")
@@ -971,6 +1186,11 @@ class Ventana(QMainWindow):
 
     def _restaurar_ajustes(self):
         self._restaurar_carpetas()
+        csv_iny = self.ajustes.value("csv_inyectar", "")
+        if csv_iny and Path(csv_iny).is_file():
+            self.cargar_csv_inyectar(csv_iny)
+        else:
+            self.refrescar_sin_meta()
         csv = self.ajustes.value("csv", "")
         if csv and Path(csv).is_file():
             self.cargar_csv(csv)
@@ -1054,6 +1274,7 @@ class Ventana(QMainWindow):
         self._pintar_carpetas()
         if clave in ("input", "output"):
             self.refrescar_libros()
+            self.refrescar_sin_meta()
 
     def carpetas_por_defecto(self):
         for clave, _, _, _ in CARPETAS:
@@ -1195,7 +1416,8 @@ class Ventana(QMainWindow):
             self.tabla.insertRow(fila)
             nombre = libro["libro"]
             bloqueado = (self.carpetas["temp"] / nombre).exists()
-            ya_hecho = (self.carpetas["output"] / f"{nombre}.pdf").exists()
+            ya_hecho = (self.carpetas["output"] / f"{nombre}.pdf").exists() or \
+                (self.carpetas["output"] / SIN_META_SUBDIR / f"{nombre}.pdf").exists()
 
             chk = QTableWidgetItem()
             if bloqueado or ya_hecho:
@@ -1234,7 +1456,7 @@ class Ventana(QMainWindow):
             hc.addStretch()
             self.tabla.setCellWidget(fila, 4, celda)
         self.tabla.blockSignals(False)
-        self._actualizar_titulo_libros()
+        self._filtrar_libros()     # la búsqueda se mantiene al actualizar la lista
 
     def _seleccionados(self):
         sel = []
@@ -1245,18 +1467,52 @@ class Ventana(QMainWindow):
         return sel
 
     def _marcar_todos(self, marcar):
+        """Marca o desmarca los libros visibles (los que deja ver la búsqueda)."""
+        self.tabla.blockSignals(True)
+        for fila in range(self.tabla.rowCount()):
+            item = self.tabla.item(fila, 0)
+            if item.flags() & Qt.ItemIsUserCheckable and not self.tabla.isRowHidden(fila):
+                item.setCheckState(Qt.Checked if marcar else Qt.Unchecked)
+        self.tabla.blockSignals(False)
+        self._actualizar_titulo_libros()
+
+    def _coincide(self, fila):
+        texto = self.buscar.text().strip().upper()
+        if not texto:
+            return True
+        # Se busca en el nombre de la carpeta (con " OK" incluido) y en el del libro
+        nombres = (self.tabla.item(fila, 1).text().upper(), self.tabla.item(fila, 0).data(Qt.UserRole).upper())
+        modo = self.modo_busqueda.currentData()
+        if modo == "inicio":
+            return any(n.startswith(texto) for n in nombres)
+        if modo == "fin":
+            return any(n.endswith(texto) for n in nombres)
+        return any(texto in n for n in nombres)
+
+    def _filtrar_libros(self, *_):
+        for fila in range(self.tabla.rowCount()):
+            self.tabla.setRowHidden(fila, not self._coincide(fila))
+        self._actualizar_titulo_libros()
+
+    def _solo_coincidentes(self):
         self.tabla.blockSignals(True)
         for fila in range(self.tabla.rowCount()):
             item = self.tabla.item(fila, 0)
             if item.flags() & Qt.ItemIsUserCheckable:
-                item.setCheckState(Qt.Checked if marcar else Qt.Unchecked)
+                item.setCheckState(Qt.Checked if self._coincide(fila) else Qt.Unchecked)
         self.tabla.blockSignals(False)
         self._actualizar_titulo_libros()
 
     def _actualizar_titulo_libros(self, *_):
         total = self.tabla.rowCount()
-        self.libros_titulo.setText(f"Libros en INPUT ({len(self._seleccionados())} de {total} seleccionados)"
-                                   if total else f"Libros en INPUT (no hay carpetas en {self.carpetas['input']})")
+        if not total:
+            self.libros_titulo.setText(f"Libros en INPUT (no hay carpetas en {self.carpetas['input']})")
+            return
+        texto = f"Libros en INPUT ({len(self._seleccionados())} de {total} seleccionados"
+        if self.buscar.text().strip():
+            visibles = sum(not self.tabla.isRowHidden(f) for f in range(total))
+            texto += f" · {visibles} coinciden con «{self.buscar.text().strip()}»"
+        self.libros_titulo.setText(texto + ")")
 
     # ── Ejecutar ───────────────────────────────────────────────────────────
 
@@ -1315,6 +1571,7 @@ class Ventana(QMainWindow):
         self.ejecucion.linea.connect(self._linea)
         self.ejecucion.terminado.connect(self._terminado)
         self._en_marcha(True)
+        self._estado_inyectar()
 
     def detener(self):
         if not self.ejecucion:
@@ -1342,6 +1599,8 @@ class Ventana(QMainWindow):
         tipo_pill(self.estado_general, "Procesando…" if si else "Listo para procesar", "info" if si else "ok")
 
     def _terminado(self, codigo):
+        self.ejecucion = None
+        self.refrescar_sin_meta()
         self._leer_resultados()
         self._limpiar_activos()
         self._en_marcha(False)
@@ -1497,7 +1756,7 @@ class Ventana(QMainWindow):
         h = QHBoxLayout(fila)
         h.setContentsMargins(0, 4, 0, 4)
         tipo, texto = {
-            "OK": ("ok", "PDF listo"), "SIN_META": ("warn", "PDF listo, sin metadatos"),
+            "OK": ("ok", "PDF listo"), "SIN_META": ("warn", f"PDF listo, sin metadatos (OUTPUT/{SIN_META_SUBDIR})"),
             "REVIEW": ("error", motivo), "ERROR": ("error", motivo),
             "REINTENTAR": ("warn", motivo or "Queda en INPUT"),
         }.get(estado, ("gris", motivo))
@@ -1507,7 +1766,8 @@ class Ventana(QMainWindow):
         h.addWidget(lbl, 1)
         if estado in ("OK", "SIN_META"):
             b = QPushButton("Abrir PDF")
-            b.clicked.connect(lambda _=False, p=self.carpetas["output"] / f"{libro}.pdf": self.abrir(p))
+            sub = SIN_META_SUBDIR if estado == "SIN_META" else ""
+            b.clicked.connect(lambda _=False, p=self.carpetas["output"] / sub / f"{libro}.pdf": self.abrir(p))
             h.addWidget(b)
         elif estado == "REVIEW":
             b = QPushButton("Ver carpeta")
