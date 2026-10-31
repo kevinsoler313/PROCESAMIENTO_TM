@@ -14,7 +14,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="${SCRIPT_DIR}/ocr_env"
 APP="${SCRIPT_DIR}/interfaz/app.py"
-ICONO="${SCRIPT_DIR}/interfaz/icono.svg"
+ICONO="${SCRIPT_DIR}/interfaz/icono.png"
 DESKTOP_ID="procesamiento-ocr.desktop"
 MENU_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 

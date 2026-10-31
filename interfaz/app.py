@@ -27,8 +27,7 @@ from PySide6.QtCore import (QBuffer, QByteArray, QIODevice, QObject, QSettings, 
 from PySide6.QtGui import QColor, QDesktopServices, QFont, QFontDatabase, QIcon, QPalette, QPixmap
 from PySide6.QtPdf import QPdfDocument
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QFileDialog, QFrame, QGraphicsDropShadowEffect, QGridLayout,
-    QHBoxLayout,
+    QApplication, QCheckBox, QComboBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout,
     QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit,
     QProgressBar, QPushButton, QScrollArea, QSlider, QSpinBox, QStackedWidget, QTabWidget, QTableWidget,
     QTableWidgetItem, QVBoxLayout, QWidget,
@@ -42,12 +41,15 @@ SCRIPT_DIR = Path(__file__).resolve().parent.parent
 MAIN_SH = SCRIPT_DIR / "main.sh"
 INYECTAR_SH = SCRIPT_DIR / "inyectar_metadatos.sh"
 SIN_META_SUBDIR = "SIN METADATOS"     # dentro de OUTPUT; igual que en metadatos.sh
-ICONO = Path(__file__).resolve().parent / "icono.svg"
+ICONO = Path(__file__).resolve().parent / "icono.png"
+# Ajustes guardados (QSettings). PROCESAMIENTO_PERFIL permite probar sin tocar los del usuario.
+PERFIL = os.environ.get("PROCESAMIENTO_PERFIL", "ProcesamientoOCR")
 MARCA_JSON = SCRIPT_DIR / "logs" / "marca_interfaz.json"   # lo que se pasa a main.sh
 
 # La vista previa usa el mismo código que estampa la marca en los PDF
 sys.path.insert(0, str(SCRIPT_DIR))
 import marca_agua as MA  # noqa: E402
+import contenedores_gdoc as CG  # noqa: E402
 
 PREVIEW_W, PREVIEW_H = 150, 212    # proporción A4
 
@@ -99,6 +101,9 @@ MAX_OCR_JOBS = 64
 SIN_GPU = "Sin tarjeta gráfica dedicada"
 # Textos de marca de agua permitidos. No se editan desde la interfaz: uno nuevo
 # se agrega aquí.
+# Sedes donde se usa el programa (Configuración); de la sede dependen otros datos
+SEDES = CG.SEDES
+
 TEXTOS_MARCA = [
     "CONGRESO DE LA REPÚBLICA - REPOSITORIO CÁMARA DE REPRESENTANTES",
 ]
@@ -176,36 +181,55 @@ NOMBRE_PASO = {2: "OCR", 3: "Marca de agua", 4: "PDF/A", 5: "Metadatos",
 
 LOGO_TM = Path(__file__).resolve().parent / "logo_technomart.jpg"
 
-# Paleta de technomart.com.co (azul marino, rojo de marca y azul de enlaces).
-# Cada tema tiene niveles bien separados: barra lateral < fondo < tarjetas, para
-# que en modo oscuro también se distinga cada zona.
+# Sistema visual (DESIGN.md): planos azul-negro planos, separados por aros de 1 px,
+# radios de 6 px en controles y 8 px en tarjetas, sin sombras ni degradados. La
+# "señal" de acento es el rojo de TechnoMart (acciones principales y estado
+# activo) y el azul de marca va en foco, avance y enlaces. El modo claro es el
+# mismo sistema invertido sobre planos blancos.
 TEMAS = {
-    "claro": {
-        "fondo": "#f3f5f9", "card": "#ffffff", "panel": "#f8fafc", "barra": "#ffffff",
-        "borde": "#e2e8f0", "borde_fuerte": "#cbd5e1", "texto": "#13233a", "texto_sub": "#64748b",
-        "acento": "#0c5aa6", "acento_suave": "#e8f1fb", "rojo": "#c01120", "rojo_hover": "#a00e1b",
-        "rojo_off": "#e9b4b9", "off": "#a3b1c2", "log_fondo": "#0b1a2e", "log_texto": "#c3d3e6",
-        "scroll": "#cbd5e1", "hover": "#f1f5f9",
-        "nav_fondo": "#0a1f3a", "nav_borde": "#0a1f3a", "nav_texto": "#9fb3cc", "nav_hover": "#12305a",
-        "nav_activo": "#163a6b", "nav_titulo": "#5f7a99", "nav_pie": "#5f7a99",
-        "ok": ("#e3f5e8", "#17663a"), "warn": ("#fdf2dd", "#8a5300"), "error": ("#fce6e8", "#b3121f"),
-        "gris": ("#eef2f6", "#5b6b80"), "info": ("#e5effa", "#0c5aa6"),
-    },
     "oscuro": {
-        "fondo": "#0d1522", "card": "#151f30", "panel": "#111a29", "barra": "#111a29",
-        "borde": "#243248", "borde_fuerte": "#33445e", "texto": "#e7edf5", "texto_sub": "#94a3b8",
-        "acento": "#5fb4f0", "acento_suave": "#132a45", "rojo": "#e23a4b", "rojo_hover": "#c8273a",
-        "rojo_off": "#5a2832", "off": "#56657c", "log_fondo": "#080e18", "log_texto": "#b9c8dc",
-        "scroll": "#33445e", "hover": "#1b2740",
-        "nav_fondo": "#070c15", "nav_borde": "#1c2738", "nav_texto": "#8fa1b8", "nav_hover": "#111b2b",
-        "nav_activo": "#17243a", "nav_titulo": "#4f607a", "nav_pie": "#4f607a",
-        "ok": ("#123623", "#7fd6a0"), "warn": ("#3a2b0e", "#f2c26b"), "error": ("#43161d", "#ff8d99"),
-        "gris": ("#1b2638", "#94a3b8"), "info": ("#12304f", "#7cc4f5"),
+        "fondo": "#020618",        # Void Canvas: lienzo, barra superior, controles oscuros
+        "card": "#080e21",         # Midnight Panel: tarjetas, barra lateral, tablas
+        "panel": "#0f172b",        # Deep Slate: pestaña/ítem activo, paneles internos
+        "barra": "#020618",
+        "borde": "#1d293d",        # Steel Outline: aros de tarjetas y separadores
+        "borde_fuerte": "#314158",  # Blue Steel: aros de controles
+        "texto": "#e2e8f0",        # Pale Frost
+        "titulo": "#ffffff",       # Signal White
+        "texto_sub": "#90a1b9",    # Muted Fog
+        "acento": "#4c9fe6", "acento_suave": "#0f2340",
+        "rojo": "#e1283a", "rojo_hover": "#c81d2f", "rojo_off": "#4a1d26",
+        "off": "#4a5a73", "log_fondo": "#020618", "log_texto": "#e2e8f0",
+        "scroll": "#314158", "hover": "#0f172b",
+        "nav_fondo": "#080e21", "nav_borde": "#1d293d", "nav_texto": "#90a1b9", "nav_hover": "#0f172b",
+        "nav_activo": "#0f172b", "nav_texto_activo": "#ffffff", "nav_titulo": "#5d6d87", "nav_pie": "#5d6d87",
+        "nav_icono": "#90a1b9", "nav_icono_activo": "#ffffff",
+        "ok": ("#062b1f", "#4ade80"), "warn": ("#2e2108", "#fbbf24"), "error": ("#33101a", "#ff8a95"),
+        "gris": ("#0f172b", "#90a1b9"), "info": ("#0d2238", "#7cc0f5"),
+    },
+    "claro": {
+        "fondo": "#f8fafc", "card": "#ffffff", "panel": "#f1f5f9", "barra": "#ffffff",
+        "borde": "#e2e8f0", "borde_fuerte": "#cbd5e1",
+        "texto": "#1e293b", "titulo": "#0f172b", "texto_sub": "#64748b",
+        "acento": "#0c5aa6", "acento_suave": "#e8f1fb",
+        "rojo": "#c01120", "rojo_hover": "#a00e1b", "rojo_off": "#ecb8bd",
+        "off": "#a3b1c2", "log_fondo": "#020618", "log_texto": "#e2e8f0",
+        "scroll": "#cbd5e1", "hover": "#f1f5f9",
+        "nav_fondo": "#ffffff", "nav_borde": "#e2e8f0", "nav_texto": "#475569", "nav_hover": "#f1f5f9",
+        "nav_activo": "#f1f5f9", "nav_texto_activo": "#0f172b", "nav_titulo": "#94a3b8", "nav_pie": "#94a3b8",
+        "nav_icono": "#64748b", "nav_icono_activo": "#c01120",
+        "ok": ("#e7f6ec", "#15803d"), "warn": ("#fdf3dc", "#a16207"), "error": ("#fde8ea", "#b3121f"),
+        "gris": ("#f1f5f9", "#475569"), "info": ("#e8f1fb", "#0c5aa6"),
     },
 }
 
-FUENTE_TEXTO = ["Inter", "Segoe UI", "Noto Sans", "DejaVu Sans", "sans-serif"]
-FUENTE_TITULOS = '"Barlow", "Inter", "Segoe UI", "DejaVu Sans", sans-serif'
+FUENTE_TEXTO = ["Public Sans", "Inter", "Segoe UI", "Noto Sans", "DejaVu Sans", "sans-serif"]
+FUENTE_TITULOS = '"Public Sans", "Inter", "Segoe UI", "DejaVu Sans", sans-serif'
+# Flechas de desplegables y campos numéricos (gris del sistema, sirven en ambos temas)
+FLECHA_ABAJO = (Path(__file__).resolve().parent / "flecha_abajo.svg").as_posix()
+FLECHA_ARRIBA = (Path(__file__).resolve().parent / "flecha_arriba.svg").as_posix()
+CHECK = (Path(__file__).resolve().parent / "check.svg").as_posix()
+FUENTE_MONO = '"SFMono-Regular", "Menlo", "Consolas", "DejaVu Sans Mono", "Liberation Mono", monospace'
 
 
 def estilo(nombre_tema):
@@ -217,103 +241,129 @@ def estilo(nombre_tema):
         for k in ("ok", "warn", "error", "gris", "info"))
     return f"""
 QMainWindow, QScrollArea, #contenido {{ background: {t['fondo']}; }}
-QWidget {{ color: {t['texto']}; }}
-QToolTip {{ background: {t['card']}; color: {t['texto']}; border: 1px solid {t['borde']}; padding: 6px; }}
+QWidget {{ color: {t['texto']}; font-size: 13px; }}
+QToolTip {{ background: {t['card']}; color: {t['texto']}; border: 1px solid {t['borde_fuerte']};
+            border-radius: 6px; padding: 6px 8px; }}
 
-/* Barra lateral */
+/* Barra lateral: plano contenido (como el árbol de archivos de un editor) */
 QFrame#nav {{ background: {t['nav_fondo']}; border-right: 1px solid {t['nav_borde']}; }}
-QFrame#logoChip {{ background: #ffffff; border-radius: 10px; }}
-QLabel#navApp {{ color: #ffffff; font-family: {FUENTE_TITULOS}; font-size: 15px; font-weight: 700; }}
-QLabel#navAppSub {{ color: {t['nav_titulo']}; font-size: 11px; }}
-QLabel#navTitulo {{ color: {t['nav_titulo']}; font-size: 10px; font-weight: 700; letter-spacing: 1.6px;
-                    padding: 18px 22px 8px 22px; }}
-QPushButton#navBoton {{ text-align: left; padding: 11px 14px; margin: 1px 12px; border: none;
-    border-radius: 8px; background: transparent; color: {t['nav_texto']};
-    font-weight: 600; font-size: 13px; }}
-QPushButton#navBoton:hover {{ background: {t['nav_hover']}; color: #ffffff; }}
-QPushButton#navBoton:checked {{ background: {t['nav_activo']}; color: #ffffff; }}
-QFrame#navMarca {{ background: {t['rojo']}; border-radius: 2px; }}
+QFrame#logoChip {{ background: #ffffff; border-radius: 6px; }}
+QLabel#navApp {{ color: {t['titulo']}; font-family: {FUENTE_TITULOS}; font-size: 15px; font-weight: 700;
+                 letter-spacing: -0.3px; }}
+QLabel#navAppSub {{ color: {t['nav_titulo']}; font-size: 12px; }}
+QLabel#navTitulo {{ color: {t['nav_titulo']}; font-size: 10px; font-weight: 600; letter-spacing: 1.2px;
+                    padding: 22px 22px 8px 22px; }}
+QPushButton#navBoton {{ text-align: left; padding: 8px 10px; margin: 1px 12px; border: none;
+    border-radius: 6px; background: transparent; color: {t['nav_texto']};
+    font-weight: 500; font-size: 13px; }}
+QPushButton#navBoton:hover {{ background: {t['nav_hover']}; color: {t['nav_texto_activo']}; border: none; }}
+QPushButton#navBoton:checked {{ background: {t['nav_activo']}; color: {t['nav_texto_activo']}; font-weight: 600; }}
+QFrame#navSeparador {{ background: {t['nav_borde']}; margin: 0 16px; }}
 QLabel#navPie {{ color: {t['nav_pie']}; font-size: 11px; padding: 0 22px; }}
 
-/* Barra superior de la sección */
+/* Barra superior de la sección: 64 px, línea de 1 px abajo */
 QFrame#topbar {{ background: {t['barra']}; border-bottom: 1px solid {t['borde']}; }}
-QLabel#pageTitulo {{ font-family: {FUENTE_TITULOS}; font-size: 19px; font-weight: 700; }}
+QLabel#pageTitulo {{ color: {t['titulo']}; font-family: {FUENTE_TITULOS}; font-size: 20px; font-weight: 700;
+                     letter-spacing: -0.5px; }}
 QLabel#pageSub {{ color: {t['texto_sub']}; font-size: 12px; }}
 
-/* Pestañas de PROCESAMIENTO */
+/* Pestañas tipo editor: la activa sobre Deep Slate, las demás transparentes */
 QTabWidget#pestanas::pane {{ border: none; }}
 QTabWidget#pestanas QTabBar {{ background: {t['barra']}; border-bottom: 1px solid {t['borde']}; }}
 QTabWidget#pestanas QTabBar::tab {{ background: transparent; color: {t['texto_sub']}; border: none;
-    border-bottom: 2px solid transparent; padding: 11px 4px 10px 4px; margin: 0 14px;
-    font-weight: 600; font-size: 13px; }}
-QTabWidget#pestanas QTabBar::tab:first {{ margin-left: 26px; }}
+    border-radius: 6px; padding: 6px 12px; margin: 10px 2px 10px 2px; font-weight: 500; font-size: 13px; }}
+QTabWidget#pestanas QTabBar::tab:first {{ margin-left: 24px; }}
 QTabWidget#pestanas QTabBar::tab:hover {{ color: {t['texto']}; }}
-QTabWidget#pestanas QTabBar::tab:selected {{ color: {t['texto']}; border-bottom: 2px solid {t['rojo']}; }}
+QTabWidget#pestanas QTabBar::tab:selected {{ background: {t['panel']}; color: {t['titulo']};
+    border: 1px solid {t['borde_fuerte']}; }}
 
-/* Tarjetas y paneles */
-QFrame#card {{ background: {t['card']}; border: 1px solid {t['borde']}; border-radius: 12px; }}
+/* Tarjetas: Midnight Panel con aro de 1 px, sin sombra */
+QFrame#card {{ background: {t['card']}; border: 1px solid {t['borde']}; border-radius: 8px; }}
 QFrame#lineaRoja {{ background: {t['rojo']}; border-radius: 1px; }}
-QFrame#selector {{ background: {t['panel']}; border: 1px solid {t['borde']}; border-radius: 10px; }}
-QFrame#metrica {{ background: {t['panel']}; border: 1px solid {t['borde']}; border-radius: 10px; }}
-QLabel#antetitulo {{ color: {t['acento']}; font-size: 10px; font-weight: 700; letter-spacing: 1.6px; }}
-QLabel#titulo {{ font-family: {FUENTE_TITULOS}; font-size: 17px; font-weight: 700; }}
+QFrame#selector {{ background: {t['fondo']}; border: 1px solid {t['borde']}; border-radius: 8px; }}
+QFrame#metrica {{ background: {t['fondo']}; border: 1px solid {t['borde']}; border-radius: 8px; }}
+QLabel#antetitulo {{ color: {t['rojo']}; font-size: 10px; font-weight: 600; letter-spacing: 1.2px; }}
+QLabel#titulo {{ color: {t['titulo']}; font-family: {FUENTE_TITULOS}; font-size: 18px; font-weight: 700;
+                 letter-spacing: -0.4px; }}
 QLabel#sub {{ color: {t['texto_sub']}; font-size: 12px; }}
-QLabel#subtitulo {{ font-weight: 700; font-size: 13px; }}
+QLabel#subtitulo {{ color: {t['titulo']}; font-weight: 600; font-size: 13px; }}
 QLabel#aviso {{ color: {t['rojo']}; font-size: 12px; }}
 QLabel#miniatura {{ background: #ffffff; border: 1px solid {t['borde']}; border-radius: 6px;
                     font-size: 11px; color: #64748b; }}
-QLabel#pill {{ border-radius: 10px; padding: 3px 10px; font-size: 11px; font-weight: 600; }}
+QLabel#pill {{ border-radius: 11px; padding: 3px 10px; font-size: 11px; font-weight: 600; }}
 {pills}
-QLabel#metricaValor {{ font-family: {FUENTE_TITULOS}; font-size: 28px; font-weight: 700; }}
+QLabel#metricaValor {{ color: {t['titulo']}; font-family: {FUENTE_TITULOS}; font-size: 28px; font-weight: 700;
+                       letter-spacing: -0.7px; }}
 QLabel#metricaValor[tipo="error"] {{ color: {t['error'][1]}; }}
 QLabel#metricaValor[tipo="warn"] {{ color: {t['warn'][1]}; }}
 
-/* Botones */
-QPushButton {{ padding: 7px 14px; border: 1px solid {t['borde_fuerte']}; border-radius: 8px;
-               background: {t['card']}; color: {t['texto']}; font-weight: 600; font-size: 12px; }}
-QPushButton:hover {{ background: {t['hover']}; border-color: {t['acento']}; color: {t['acento']}; }}
-QPushButton:pressed {{ background: {t['acento_suave']}; }}
-QPushButton:disabled {{ color: {t['off']}; border-color: {t['borde']}; background: {t['card']}; }}
-QPushButton#primario {{ background: {t['rojo']}; color: #ffffff; border: none; padding: 10px 22px; font-size: 13px; }}
+/* Botones: contorno oscuro por defecto; la señal roja solo en la acción principal */
+QPushButton {{ padding: 6px 12px; border: 1px solid {t['borde_fuerte']}; border-radius: 6px;
+               background: transparent; color: {t['texto']}; font-weight: 500; font-size: 13px; }}
+QPushButton:hover {{ background: {t['hover']}; color: {t['titulo']}; border-color: {t['borde_fuerte']}; }}
+QPushButton:pressed {{ background: {t['panel']}; }}
+QPushButton:disabled {{ color: {t['off']}; border-color: {t['borde']}; background: transparent; }}
+QPushButton#primario {{ background: {t['rojo']}; color: #ffffff; border: none; padding: 8px 16px;
+                        font-size: 14px; font-weight: 600; }}
 QPushButton#primario:hover {{ background: {t['rojo_hover']}; color: #ffffff; }}
-QPushButton#primario:disabled {{ background: {t['rojo_off']}; color: #ffffff; }}
-QPushButton#tema {{ padding: 7px 12px; }}
+QPushButton#primario:disabled {{ background: {t['rojo_off']}; color: {t['off']}; }}
+QPushButton#tema {{ padding: 6px 10px; }}
 
-/* Campos */
-QLineEdit, QSpinBox, QComboBox {{ background: {t['card']}; border: 1px solid {t['borde_fuerte']};
-    border-radius: 8px; padding: 5px 8px; min-height: 22px; selection-background-color: {t['acento']}; }}
+/* Campos: plano oscuro con aro Blue Steel; foco en azul de marca */
+QLineEdit, QSpinBox, QComboBox {{ background: {t['fondo']}; border: 1px solid {t['borde_fuerte']};
+    border-radius: 6px; padding: 5px 8px; min-height: 20px; color: {t['texto']};
+    selection-background-color: {t['acento']}; selection-color: #ffffff; }}
 QLineEdit:focus, QSpinBox:focus, QComboBox:focus {{ border: 1px solid {t['acento']}; }}
 QLineEdit[readOnly="true"] {{ background: {t['panel']}; border: 1px solid {t['borde']}; }}
-QLineEdit:disabled, QSpinBox:disabled, QComboBox:disabled {{ color: {t['off']}; background: {t['panel']};
+QLineEdit:disabled, QSpinBox:disabled, QComboBox:disabled {{ color: {t['off']}; background: {t['card']};
     border-color: {t['borde']}; }}
-QComboBox::drop-down {{ border: none; width: 22px; }}
-QComboBox QAbstractItemView {{ background: {t['card']}; border: 1px solid {t['borde']};
-    selection-background-color: {t['acento_suave']}; selection-color: {t['texto']}; outline: none; }}
-QSpinBox::up-button, QSpinBox::down-button {{ width: 18px; border: none; background: transparent; }}
+QComboBox::drop-down {{ subcontrol-origin: padding; subcontrol-position: center right; width: 24px;
+    border: none; background: transparent; }}
+QComboBox::down-arrow {{ image: url({FLECHA_ABAJO}); width: 10px; height: 10px; }}
+QSpinBox {{ padding-right: 22px; }}
+QSpinBox::up-button, QSpinBox::down-button {{ subcontrol-origin: border; width: 20px; border: none;
+    background: transparent; }}
+QSpinBox::up-button {{ subcontrol-position: top right; margin-top: 3px; }}
+QSpinBox::down-button {{ subcontrol-position: bottom right; margin-bottom: 3px; }}
+QSpinBox::up-button:hover, QSpinBox::down-button:hover {{ background: {t['panel']}; border-radius: 4px; }}
+QSpinBox::up-arrow {{ image: url({FLECHA_ARRIBA}); width: 9px; height: 9px; }}
+QSpinBox::down-arrow {{ image: url({FLECHA_ABAJO}); width: 9px; height: 9px; }}
+QComboBox {{ combobox-popup: 0; }}
+QComboBox QAbstractItemView {{ background: {t['card']}; border: 1px solid {t['borde_fuerte']};
+    selection-background-color: {t['panel']}; selection-color: {t['titulo']}; outline: none; }}
 
-/* Barras, deslizadores */
-QProgressBar {{ border: none; background: {t['borde']}; border-radius: 4px; }}
-QProgressBar::chunk {{ background: {t['acento']}; border-radius: 4px; }}
+/* Casillas: aro Blue Steel; marcadas, en rojo de marca con ✓ blanca */
+QCheckBox {{ spacing: 8px; }}
+QCheckBox::indicator, QTableWidget::indicator {{ width: 14px; height: 14px; border-radius: 4px;
+    border: 1px solid {t['borde_fuerte']}; background: {t['fondo']}; }}
+QCheckBox::indicator:hover, QTableWidget::indicator:hover {{ border-color: {t['acento']}; }}
+QCheckBox::indicator:checked, QTableWidget::indicator:checked {{ background: {t['rojo']}; border-color: {t['rojo']};
+    image: url({CHECK}); }}
+QCheckBox::indicator:disabled, QTableWidget::indicator:disabled {{ background: {t['card']}; border-color: {t['borde']}; }}
+
+/* Barras de avance y deslizador */
+QProgressBar {{ border: none; background: {t['borde']}; border-radius: 3px; }}
+QProgressBar::chunk {{ background: {t['acento']}; border-radius: 3px; }}
 QSlider::groove:horizontal {{ height: 4px; background: {t['borde']}; border-radius: 2px; }}
 QSlider::sub-page:horizontal {{ background: {t['acento']}; border-radius: 2px; }}
-QSlider::handle:horizontal {{ width: 16px; height: 16px; margin: -6px 0; border-radius: 8px;
-    background: #ffffff; border: 2px solid {t['acento']}; }}
+QSlider::handle:horizontal {{ width: 14px; height: 14px; margin: -5px 0; border-radius: 7px;
+    background: {t['titulo']}; border: 2px solid {t['acento']}; }}
 
-/* Tablas */
-QTableWidget {{ background: {t['card']}; alternate-background-color: {t['panel']}; border: 1px solid {t['borde']};
-    border-radius: 10px; gridline-color: transparent; }}
+/* Tablas: plano contenido con aro de 1 px */
+QTableWidget {{ background: {t['card']}; alternate-background-color: {t['fondo']}; border: 1px solid {t['borde']};
+    border-radius: 8px; gridline-color: transparent; }}
 QTableWidget::item {{ padding: 0 6px; border-bottom: 1px solid {t['borde']}; }}
 QTableWidget::item:disabled {{ color: {t['off']}; }}
 QHeaderView {{ background: transparent; }}
-QHeaderView::section {{ background: {t['panel']}; border: none; border-bottom: 1px solid {t['borde']};
-    padding: 8px 6px; color: {t['texto_sub']}; font-weight: 700; font-size: 11px; }}
-QTableCornerButton::section {{ background: {t['panel']}; border: none; }}
+QHeaderView::section {{ background: {t['card']}; border: none; border-bottom: 1px solid {t['borde']};
+    padding: 8px 6px; color: {t['texto_sub']}; font-weight: 600; font-size: 12px; }}
+QTableCornerButton::section {{ background: {t['card']}; border: none; }}
 
-/* Log */
+/* Log: como un fragmento de terminal */
 QPlainTextEdit {{ background: {t['log_fondo']}; color: {t['log_texto']}; border: 1px solid {t['borde']};
-    border-radius: 10px; font-family: "DejaVu Sans Mono", monospace; font-size: 11px; padding: 8px; }}
+    border-radius: 6px; font-family: {FUENTE_MONO}; font-size: 12px; padding: 8px 12px; }}
 
-/* Barras de desplazamiento */
+/* Barras de desplazamiento finas */
 QScrollBar:vertical {{ background: transparent; width: 10px; margin: 2px; }}
 QScrollBar::handle:vertical {{ background: {t['scroll']}; border-radius: 4px; min-height: 30px; }}
 QScrollBar:horizontal {{ background: transparent; height: 10px; margin: 2px; }}
@@ -333,7 +383,7 @@ def paleta(nombre_tema):
         (QPalette.Base, t["card"]), (QPalette.AlternateBase, t["panel"]),
         (QPalette.Text, t["texto"]), (QPalette.Button, t["card"]),
         (QPalette.ButtonText, t["texto"]), (QPalette.Highlight, t["acento"]),
-        (QPalette.HighlightedText, "#ffffff" if nombre_tema == "claro" else "#071b33"),
+        (QPalette.HighlightedText, "#ffffff"),
         (QPalette.ToolTipBase, t["card"]), (QPalette.ToolTipText, t["texto"]),
         (QPalette.PlaceholderText, t["texto_sub"]), (QPalette.Link, t["acento"]),
     ]:
@@ -348,13 +398,16 @@ ICONOS_NAV = {
     "procesar": '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/><path d="M3 13h18"/>',
     "metadatos": '<path d="M3 12V4h8l10 10-8 8z"/><circle cx="7.5" cy="7.5" r="1.4"/>',
     "contenedor": '<path d="M3 4h18v4H3z"/><path d="M5 8h14v12H5z"/><path d="M10 12h4"/>',
+    "configuracion": '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3'
+                     'M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"/>',
 }
 
 
-def icono_nav(nombre):
-    """Ícono de trazo: gris azulado en reposo, blanco en la sección activa."""
+def icono_nav(nombre, tema="oscuro"):
+    """Ícono de trazo: gris en reposo; en la sección activa, blanco (oscuro) o rojo (claro)."""
+    t = TEMAS[tema]
     icono = QIcon()
-    for color, estado in (("#8fa1b8", QIcon.Off), ("#ffffff", QIcon.On)):
+    for color, estado in ((t["nav_icono"], QIcon.Off), (t["nav_icono_activo"], QIcon.On)):
         svg = ('<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" '
                f'fill="none" stroke="{color}" stroke-width="1.8" stroke-linecap="round" '
                f'stroke-linejoin="round">{ICONOS_NAV[nombre]}</svg>')
@@ -493,12 +546,14 @@ class Escaner(QObject):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class Ventana(QMainWindow):
+    paginas_listas = Signal(int, int, int)    # turno, fila, páginas (-1 = no se pudo leer)
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Procesamiento OCR")
         self.setWindowIcon(QIcon(str(ICONO)))
         self.resize(1320, 940)
-        self.ajustes = QSettings("TechnoMart", "ProcesamientoOCR")
+        self.ajustes = QSettings("TechnoMart", PERFIL)
 
         self.codigos_csv = None
         self.logo_ruta = None
@@ -563,13 +618,27 @@ class Ventana(QMainWindow):
         self.col.addStretch()
 
         # ── Sección CREAR CONTENEDORES GDOC ──
-        self.col = self._pagina("CREAR CONTENEDORES GDOC", "contenedor", "En construcción")
+        self.col = self._pagina("CREAR CONTENEDORES GDOC", "contenedor",
+                                "CSV para importar en GDOC los libros terminados en OUTPUT")
         self._seccion_gdoc()
         self.col.addStretch()
 
+        # ── Sección CONFIGURACIÓN: al pie de la barra, aparte de las de trabajo ──
         self.nav_lay.addStretch()
-        pie = QLabel(f"{os.uname().nodename}\nLibros patrimoniales", objectName="navPie")
-        self.nav_lay.addWidget(pie)
+        separador = QFrame(objectName="navSeparador")
+        separador.setFixedHeight(1)
+        self.nav_lay.addWidget(separador)
+        self.nav_lay.addSpacing(8)
+        self.col = self._pagina("CONFIGURACIÓN", "configuracion", "Datos de la sede donde se usa el programa")
+        self._seccion_configuracion_general()
+        self.col.addStretch()
+        self.nav_lay.addSpacing(10)
+        self.nav_pie = QLabel(objectName="navPie")
+        self.nav_lay.addWidget(self.nav_pie)
+        self._pintar_sede()
+        self.paginas_listas.connect(self._gdoc_pagina_lista)
+        for combo in self.findChildren(QComboBox):
+            combo.activated.connect(combo.hidePopup)
         self._ir_a(int(self.ajustes.value("seccion", 0)))
         self.tabs.setCurrentIndex(int(self.ajustes.value("pestana", 0)))
         self.tabs.currentChanged.connect(lambda i: self.ajustes.setValue("pestana", i))
@@ -581,7 +650,7 @@ class Ventana(QMainWindow):
         self.reloj.start()
         psutil.cpu_percent(None)
 
-        self.aplicar_tema(self.ajustes.value("tema", "claro"))
+        self.aplicar_tema(self.ajustes.value("tema", "oscuro"))
         self._restaurar_ajustes()
         self.refrescar_libros()
 
@@ -617,7 +686,8 @@ class Ventana(QMainWindow):
         indice = self.secciones.addWidget(widget)
         titulo = nombre.capitalize().replace("gdoc", "GDOC")
         b = QPushButton(f"  {titulo}", objectName="navBoton")
-        b.setIcon(icono_nav(icono))
+        b.setIcon(icono_nav(icono, self.tema))
+        b.setProperty("icono", icono)
         b.setIconSize(QSize(18, 18))
         b.setCheckable(True)
         b.setCursor(Qt.PointingHandCursor)
@@ -639,12 +709,8 @@ class Ventana(QMainWindow):
         """Tarjeta con el encabezado de la web: línea roja + antetítulo + título.
         paso: número de paso ('PASO 2') o un antetítulo libre."""
         card = QFrame(objectName="card")
-        # Sombra muy suave: separa la tarjeta del fondo sin recargar
-        sombra = QGraphicsDropShadowEffect(card, blurRadius=24, xOffset=0, yOffset=2)
-        sombra.setColor(QColor(15, 23, 42, 22))
-        card.setGraphicsEffect(sombra)
         lay = QVBoxLayout(card)
-        lay.setContentsMargins(24, 18, 24, 20)
+        lay.setContentsMargins(20, 16, 20, 18)
         lay.setSpacing(10)
         fila = QHBoxLayout()
         textos = QVBoxLayout()
@@ -698,8 +764,9 @@ class Ventana(QMainWindow):
 
     def _barra_superior(self):
         barra = QFrame(objectName="topbar")
+        barra.setFixedHeight(64)
         fila = QHBoxLayout(barra)
-        fila.setContentsMargins(26, 12, 22, 12)
+        fila.setContentsMargins(24, 8, 20, 8)
         fila.setSpacing(14)
         textos = QVBoxLayout()
         textos.setSpacing(1)
@@ -861,10 +928,112 @@ class Ventana(QMainWindow):
         gc.addWidget(self.aviso_carpetas, len(CARPETAS) + 2, 0, 1, 3)
         lay.addWidget(bloque)
 
+    def _seccion_configuracion_general(self):
+        lay, _ = self._card("CONFIGURACIÓN", "Sede")
+        nota = QLabel("Elige la sede donde se usa este equipo. Otras secciones (como Crear contenedores "
+                      "GDOC) toman de aquí los datos que dependen de la sede.", objectName="sub")
+        nota.setWordWrap(True)
+        lay.addWidget(nota)
+        fila = QHBoxLayout()
+        fila.addWidget(QLabel("Sede", objectName="subtitulo"))
+        self.sede = QComboBox()
+        self.sede.addItem("Elige la sede…", "")
+        for sede in SEDES:
+            self.sede.addItem(sede, sede)
+        self.sede.setMinimumWidth(240)
+        indice = self.sede.findData(self.ajustes.value("sede", ""))
+        self.sede.setCurrentIndex(max(indice, 0))
+        self.sede.currentIndexChanged.connect(self._sede_cambiada)
+        fila.addWidget(self.sede)
+        fila.addStretch()
+        lay.addLayout(fila)
+
+    def _sede_cambiada(self, *_):
+        self.ajustes.setValue("sede", self.sede.currentData())
+        self._pintar_sede()
+        self._pintar_gdoc_config()
+
+    def _pintar_sede(self):
+        sede = self.ajustes.value("sede", "") or "sin elegir"
+        self.nav_pie.setText(f"Sede: {sede}\n{os.uname().nodename}")
+
     def _seccion_gdoc(self):
-        # Vacía por ahora: se definirá qué contenedores crea y desde dónde
-        lay, _ = self._card("CREAR CONTENEDORES GDOC", "Crear contenedores GDOC")
-        lay.addWidget(QLabel("Esta sección está en construcción.", objectName="sub"))
+        """CSV con la plantilla layout_importar_contenedores: una fila por PDF de OUTPUT."""
+        lay, _ = self._card("CREAR CONTENEDORES GDOC", "Configuración previa")
+        nota = QLabel("Se genera un CSV con una fila por cada PDF terminado en OUTPUT (los de "
+                      f"OUTPUT/{SIN_META_SUBDIR} no se incluyen). Columnas fijas: resguardo ARCHIVO, "
+                      "estatus DENTRO, nivel1 CONSORCIO D3LF1N y nivel2 CAMARA DE REPRESENTANTES.",
+                      objectName="sub")
+        nota.setWordWrap(True)
+        lay.addWidget(nota)
+        fila = QHBoxLayout()
+        fila.setSpacing(12)
+        fila.addWidget(QLabel("Entrega (nivel3)", objectName="subtitulo"))
+        self.gdoc_entrega = QComboBox()
+        for n in CG.ENTREGAS:
+            self.gdoc_entrega.addItem(f"ENTREGA {n}", n)
+        self.gdoc_entrega.setMinimumWidth(170)
+        guardada = self.gdoc_entrega.findData(int(self.ajustes.value("gdoc_entrega", 1)))
+        self.gdoc_entrega.setCurrentIndex(max(guardada, 0))
+        self.gdoc_entrega.currentIndexChanged.connect(
+            lambda _: self.ajustes.setValue("gdoc_entrega", self.gdoc_entrega.currentData()))
+        fila.addWidget(self.gdoc_entrega)
+        fila.addSpacing(24)
+        fila.addWidget(QLabel("Sede (Campo_1)", objectName="subtitulo"))
+        self.gdoc_sede = QLabel()
+        fila.addWidget(self.gdoc_sede)
+        fila.addStretch()
+        lay.addLayout(fila)
+
+        lay, fila = self._card("CREAR CONTENEDORES GDOC", "Libros en OUTPUT")
+        cab = QHBoxLayout()
+        self.gdoc_buscar = QLineEdit()
+        self.gdoc_buscar.setPlaceholderText("Buscar libro, p. ej. AHFCPC")
+        self.gdoc_buscar.setClearButtonEnabled(True)
+        self.gdoc_buscar.textChanged.connect(self._gdoc_filtrar)
+        cab.addWidget(self.gdoc_buscar, 1)
+        for texto, accion in (("Todos", lambda: self._gdoc_marcar(True)),
+                              ("Ninguno", lambda: self._gdoc_marcar(False)),
+                              ("Actualizar", self.refrescar_gdoc)):
+            b = QPushButton(texto)
+            b.clicked.connect(accion)
+            cab.addWidget(b)
+        lay.addLayout(cab)
+        self.gdoc_titulo = QLabel(objectName="sub")
+        lay.addWidget(self.gdoc_titulo)
+
+        self.gdoc_tabla = QTableWidget(0, 4)
+        self.gdoc_tabla.setHorizontalHeaderLabels(["", "Código (contenedor)", "Páginas", "Tamaño"])
+        self.gdoc_tabla.verticalHeader().setVisible(False)
+        self.gdoc_tabla.setSelectionMode(QTableWidget.NoSelection)
+        self.gdoc_tabla.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.gdoc_tabla.setFocusPolicy(Qt.NoFocus)
+        self.gdoc_tabla.setAlternatingRowColors(True)
+        h = self.gdoc_tabla.horizontalHeader()
+        h.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        h.setSectionResizeMode(1, QHeaderView.Stretch)
+        h.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        h.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.gdoc_tabla.verticalHeader().setDefaultSectionSize(34)
+        self.gdoc_tabla.setMinimumHeight(240)
+        self.gdoc_tabla.itemChanged.connect(self._gdoc_titulo)
+        lay.addWidget(self.gdoc_tabla)
+
+        abajo = QHBoxLayout()
+        self.gdoc_aviso = QLabel(objectName="aviso")
+        self.gdoc_aviso.setWordWrap(True)
+        abajo.addWidget(self.gdoc_aviso, 1)
+        self.btn_gdoc = QPushButton("Generar CSV", objectName="primario")
+        self.btn_gdoc.clicked.connect(self.generar_gdoc)
+        abajo.addWidget(self.btn_gdoc)
+        lay.addLayout(abajo)
+        self.gdoc_resultado = QLabel()
+        self.gdoc_resultado.setWordWrap(True)
+        self.gdoc_resultado.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        lay.addWidget(self.gdoc_resultado)
+
+        self.gdoc_libros = []          # [(código, ruta, páginas o None)]
+        self._pintar_gdoc_config()
 
     def _seccion_metadatos(self):
         """PDF que quedaron sin metadatos (OUTPUT/SIN METADATOS) + un CSV, que puede
@@ -973,6 +1142,8 @@ class Ventana(QMainWindow):
         self.texto_marca.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
         self.texto_marca.setMinimumContentsLength(8)
         self.texto_marca.currentTextChanged.connect(self.texto_marca.setToolTip)
+        self.texto_marca.currentIndexChanged.connect(
+            lambda _: self._aplicando or self.ajustes.setValue("texto_marca", self.texto_marca.currentText()))
         self.texto_marca.setToolTip(self.texto_marca.currentText())
         ht.addWidget(self.texto_marca)
         cols.addWidget(caja_txt, 1, 1)
@@ -1029,6 +1200,126 @@ class Ventana(QMainWindow):
         self.texto_marca.currentIndexChanged.connect(self._marca_cambiada)
         self.timer_preview = QTimer(self, singleShot=True, interval=150, timeout=self._pintar_preview)
         lay.addWidget(bloque)
+
+    # ── Crear contenedores GDOC ────────────────────────────────────────────
+
+    def _pintar_gdoc_config(self):
+        if not hasattr(self, "gdoc_sede"):
+            return
+        sede = self.ajustes.value("sede", "")
+        if sede:
+            self.gdoc_sede.setText(sede)
+            self.gdoc_sede.setObjectName("subtitulo")
+            if "sede" in self.gdoc_aviso.text():
+                self.gdoc_aviso.setText("")
+        else:
+            self.gdoc_sede.setText("Sin elegir: elígela en Configuración")
+            self.gdoc_sede.setObjectName("aviso")
+        self.gdoc_sede.style().unpolish(self.gdoc_sede)
+        self.gdoc_sede.style().polish(self.gdoc_sede)
+
+    def refrescar_gdoc(self):
+        """Lista los PDF de OUTPUT; las páginas se leen aparte para no congelar la ventana."""
+        pdfs = CG.libros_output(self.carpetas["output"])
+        self.gdoc_libros = [[p.stem, p, None] for p in pdfs]
+        self.gdoc_tabla.blockSignals(True)
+        self.gdoc_tabla.setRowCount(0)
+        for codigo, pdf, _ in self.gdoc_libros:
+            fila = self.gdoc_tabla.rowCount()
+            self.gdoc_tabla.insertRow(fila)
+            chk = QTableWidgetItem()
+            chk.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)
+            chk.setCheckState(Qt.Checked)
+            self.gdoc_tabla.setItem(fila, 0, chk)
+            self.gdoc_tabla.setItem(fila, 1, QTableWidgetItem(codigo))
+            pag = QTableWidgetItem("…")
+            pag.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            self.gdoc_tabla.setItem(fila, 2, pag)
+            peso = QTableWidgetItem(formato_gb(pdf.stat().st_size))
+            peso.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            self.gdoc_tabla.setItem(fila, 3, peso)
+        self.gdoc_tabla.blockSignals(False)
+        self._gdoc_filtrar()
+        self.gdoc_contador = getattr(self, "gdoc_contador", 0) + 1
+        threading.Thread(target=self._gdoc_contar_paginas, args=(self.gdoc_contador,), daemon=True).start()
+
+    def _gdoc_contar_paginas(self, turno):
+        for i, (_, pdf, _) in enumerate(list(self.gdoc_libros)):
+            if turno != self.gdoc_contador:      # se pidió otra lista: abandonar
+                return
+            n = CG.paginas_pdf(pdf)
+            self.paginas_listas.emit(turno, i, -1 if n is None else n)
+
+    def _gdoc_pagina_lista(self, turno, i, n):
+        if turno != self.gdoc_contador or i >= len(self.gdoc_libros):
+            return
+        self.gdoc_libros[i][2] = None if n < 0 else n
+        self.gdoc_tabla.blockSignals(True)
+        self.gdoc_tabla.item(i, 2).setText("no se pudo leer" if n < 0 else str(n))
+        self.gdoc_tabla.blockSignals(False)
+        self._gdoc_titulo()
+
+    def _gdoc_filtrar(self, *_):
+        texto = self.gdoc_buscar.text().strip().upper()
+        for fila in range(self.gdoc_tabla.rowCount()):
+            codigo = self.gdoc_tabla.item(fila, 1).text().upper()
+            self.gdoc_tabla.setRowHidden(fila, bool(texto) and texto not in codigo)
+        self._gdoc_titulo()
+
+    def _gdoc_marcar(self, marcar):
+        self.gdoc_tabla.blockSignals(True)
+        for fila in range(self.gdoc_tabla.rowCount()):
+            if not self.gdoc_tabla.isRowHidden(fila):
+                self.gdoc_tabla.item(fila, 0).setCheckState(Qt.Checked if marcar else Qt.Unchecked)
+        self.gdoc_tabla.blockSignals(False)
+        self._gdoc_titulo()
+
+    def _gdoc_seleccion(self):
+        return [i for i in range(self.gdoc_tabla.rowCount())
+                if self.gdoc_tabla.item(i, 0).checkState() == Qt.Checked]
+
+    def _gdoc_titulo(self, *_):
+        total = self.gdoc_tabla.rowCount()
+        if not total:
+            self.gdoc_titulo.setText(f"No hay PDF en {self.carpetas['output']}")
+            return
+        pendientes = sum(1 for _, _, n in self.gdoc_libros if n is None)
+        texto = f"{len(self._gdoc_seleccion())} de {total} libros marcados"
+        if pendientes:
+            texto += f" · leyendo páginas ({total - pendientes}/{total})"
+        self.gdoc_titulo.setText(texto)
+
+    def generar_gdoc(self):
+        sede = self.ajustes.value("sede", "")
+        seleccion = self._gdoc_seleccion()
+        if not sede:
+            self.gdoc_aviso.setText("Falta elegir la sede en Configuración.")
+            return
+        if not seleccion:
+            self.gdoc_aviso.setText("Marca al menos un libro.")
+            return
+        sin_paginas = [self.gdoc_libros[i][0] for i in seleccion if self.gdoc_libros[i][2] is None]
+        if sin_paginas:
+            self.gdoc_aviso.setText("Aún se están leyendo las páginas (o no se pudieron leer) de: "
+                                    + ", ".join(sin_paginas[:5]) + (" …" if len(sin_paginas) > 5 else ""))
+            return
+        self.gdoc_aviso.setText("")
+        entrega = self.gdoc_entrega.currentData()
+        sugerido = Path(self.carpetas["registro"]) / f"contenedores_ENTREGA_{entrega}_{sede.replace(' ', '_')}.csv"
+        destino, _ = QFileDialog.getSaveFileName(self, "Guardar CSV de contenedores", str(sugerido), "CSV (*.csv)")
+        if not destino:
+            return
+        filas = [CG.fila(self.gdoc_libros[i][0], self.gdoc_libros[i][2], entrega, sede) for i in seleccion]
+        try:
+            Path(destino).parent.mkdir(parents=True, exist_ok=True)
+            CG.escribir_csv(destino, filas)
+        except OSError as e:
+            QMessageBox.warning(self, "Generar CSV", f"No se pudo guardar el CSV.\n{e}")
+            return
+        paginas = sum(f[10] for f in filas)
+        paginas_txt = f"{paginas:,}".replace(",", ".")
+        self.gdoc_resultado.setText(f"✓ {len(filas)} libro(s), {paginas_txt} páginas · ENTREGA {entrega} · "
+                                    f"sede {sede}\n{destino}")
 
     # ── Inyectar metadatos ─────────────────────────────────────────────────
 
@@ -1156,6 +1447,7 @@ class Ventana(QMainWindow):
             partes = [f"✗ La inyección terminó con error ({codigo}). Revisa el log."]
         self.iny_resultado.setText("\n".join(partes))
         self.refrescar_sin_meta()
+        self.refrescar_gdoc()
         QApplication.alert(self)
 
     # ── Marca de agua ──────────────────────────────────────────────────────
@@ -1231,6 +1523,8 @@ class Ventana(QMainWindow):
         self.modo_busqueda.addItem("Contiene", "contiene")
         self.modo_busqueda.addItem("Termina con", "fin")
         self.modo_busqueda.currentIndexChanged.connect(self._filtrar_libros)
+        self.modo_busqueda.currentIndexChanged.connect(
+            lambda _: self.ajustes.setValue("modo_busqueda", self.modo_busqueda.currentData()))
         busq.addWidget(self.modo_busqueda)
         self.btn_solo_estos = QPushButton("Solo estos")
         self.btn_solo_estos.setToolTip("Marca los libros que coinciden con la búsqueda y desmarca los demás")
@@ -1277,6 +1571,7 @@ class Ventana(QMainWindow):
         self.png = QCheckBox("Exportar también PNG de cada página")
         self.png.setToolTip("Opcional: guarda cada página como PNG (sin marca de agua) en la carpeta PNG.")
         self.png.toggled.connect(self._activar_png)
+        self.png.toggled.connect(lambda v: self.ajustes.setValue("png", "true" if v else "false"))
         abajo.addWidget(self.png)
         abajo.addSpacing(16)
         self.aviso = QLabel(objectName="aviso")
@@ -1348,6 +1643,7 @@ class Ventana(QMainWindow):
 
     def _restaurar_ajustes(self):
         self._restaurar_carpetas()
+        self.refrescar_gdoc()
         csv_iny = self.ajustes.value("csv_inyectar", "")
         if csv_iny and Path(csv_iny).is_file():
             self.cargar_csv_inyectar(csv_iny)
@@ -1363,6 +1659,8 @@ class Ventana(QMainWindow):
 
         indice = self.texto_marca.findText(self.ajustes.value("texto_marca", ""))
         self.texto_marca.setCurrentIndex(max(indice, 0))
+        indice = self.modo_busqueda.findData(self.ajustes.value("modo_busqueda", "inicio"))
+        self.modo_busqueda.setCurrentIndex(max(indice, 0))
 
         # Marca de agua: se lee todo antes de tocar controles (cada cambio guarda)
         try:
@@ -1437,6 +1735,7 @@ class Ventana(QMainWindow):
         if clave in ("input", "output"):
             self.refrescar_libros()
             self.refrescar_sin_meta()
+            self.refrescar_gdoc()
 
     def carpetas_por_defecto(self):
         for clave, _, _, _ in CARPETAS:
@@ -1485,6 +1784,8 @@ class Ventana(QMainWindow):
     def _marcar_personalizado(self, *_):
         if self._aplicando:
             return
+        self.ajustes.setValue("ocr_jobs", self.ocr_slider.value())
+        self.ajustes.setValue("jobs", self.jobs.value())
         ocr, libros, explicacion = recomendar(self.ram.value(), self.hilos.value(), self.gpu.currentText())
         recomendada = (self.ocr_slider.value(), self.jobs.value()) == (ocr, libros)
         self.resumen_rend.setText(
@@ -1540,6 +1841,8 @@ class Ventana(QMainWindow):
         app = QApplication.instance()
         app.setPalette(paleta(nombre))
         app.setStyleSheet(estilo(nombre))
+        for b, _, _ in getattr(self, "botones_nav", []):
+            b.setIcon(icono_nav(b.property("icono"), nombre))
         self.btn_tema.setText("☀  Modo claro" if nombre == "oscuro" else "☾  Modo oscuro")
         self._pintar_detalle_csv()
 
@@ -1763,6 +2066,7 @@ class Ventana(QMainWindow):
     def _terminado(self, codigo):
         self.ejecucion = None
         self.refrescar_sin_meta()
+        self.refrescar_gdoc()
         self._leer_resultados()
         self._limpiar_activos()
         self._en_marcha(False)
@@ -1973,7 +2277,7 @@ def main():
         QFontDatabase.addApplicationFont(str(ttf))
     fuente = QFont()
     fuente.setFamilies(FUENTE_TEXTO)
-    fuente.setPointSize(10)
+    fuente.setPixelSize(13)
     app.setFont(fuente)
     ventana = Ventana()
     ventana.show()

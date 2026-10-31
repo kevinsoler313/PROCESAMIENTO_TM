@@ -20,6 +20,8 @@ output/
 *.jpeg
 # …salvo la imagen propia de la interfaz
 !interfaz/logo_technomart.jpg
+!interfaz/icono.png
+!interfaz/*.svg
 
 # Archivos del sistema y de editores
 Thumbs.db

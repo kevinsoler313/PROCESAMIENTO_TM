@@ -78,13 +78,39 @@ una barra lateral:
   que puede ser distinto al del procesamiento, les escribe los metadatos a los
   que estén, los pasa a OUTPUT y actualiza el registro a `OK`; avisa cuáles
   siguen sin aparecer. Usa las carpetas de Procesamiento › CARPETAS DE TRABAJO.
-- **Crear contenedores GDOC:** en construcción.
+- **Crear contenedores GDOC:** genera el CSV para importar contenedores en GDOC
+  (ver abajo). Se elige la entrega (ENTREGA 1 a 30) y los libros de OUTPUT.
+- **Configuración** (al pie de la barra): la sede donde se usa el equipo
+  (AGN, BIBLIOTECA, FUNZA o SANTA CLARA).
 
-Tiene modo claro y oscuro, y recuerda la última sección, pestaña y configuración.
+Tiene modo oscuro (predeterminado) y claro, con el sistema visual de
+`DESIGN.md` adaptado a los colores de TechnoMart. Cada selección se guarda en
+cuanto se cambia y se recupera al abrir el programa. Para probar sin tocar esos
+ajustes, `PROCESAMIENTO_PERFIL=Prueba` usa un perfil aparte.
 
 Los textos de marca de agua permitidos están en `TEXTOS_MARCA` y
 `MARCA_DIAGONAL`, al inicio de `interfaz/app.py`; no se editan desde la
 interfaz.
+
+## Contenedores GDOC
+
+`contenedores_gdoc.py` crea un CSV con los encabezados de la plantilla
+`layout_importar_contenedores.xls` y una fila por cada PDF de OUTPUT (los de
+`SIN METADATOS` no entran):
+
+| Columna | Valor |
+|---|---|
+| contenedor, Campo_2 | Código del libro |
+| resguardo · estatus | ARCHIVO · DENTRO |
+| nivel1 · nivel2 | CONSORCIO D3LF1N · CAMARA DE REPRESENTANTES |
+| nivel3 | ENTREGA 1 a ENTREGA 30 |
+| Campo_1 | Sede |
+| Campo_3 | Número de páginas |
+| ubicacion, posicion, Campo_4, Campo_5 | Vacíos |
+
+```bash
+python3 contenedores_gdoc.py --output-dir /mnt/datos/OUTPUT --entrega 10 --sede FUNZA --salida contenedores.csv
+```
 
 ## Marca de agua
 
