@@ -54,30 +54,33 @@ aplicaciones y en el escritorio.
 
 ## Interfaz de escritorio
 
-`interfaz/app.py` (PySide6) prepara y lanza `main.sh`. Se organiza en pestañas:
+`interfaz/app.py` (PySide6) prepara y lanza `main.sh`. Las secciones están en
+una barra lateral:
 
-- **PROCESAMIENTO**
-  1. CSV de metadatos y resumen del rendimiento que se usará.
-  2. Libros de INPUT con páginas, tamaño y si están en el CSV; se marcan los
-     que se quieren procesar. Un buscador (empieza con, contiene, termina con)
-     filtra la lista, p. ej. "AHFCPC", y "Solo estos" marca solo los que
-     coinciden. Exportar PNG es opcional.
-  3. En proceso: avance por libro, CPU, RAM, disco y log en vivo. "Detener"
-     equivale a Ctrl+C.
-  4. Resultados: exitosos, sin metadatos, en REVIEW y por reintentar.
-- **INYECTAR METADATOS:** lista los PDF de `OUTPUT/SIN METADATOS` y, con un CSV
+- **Procesamiento**, con pestañas:
+  - **PROCESAR**
+    1. CSV de metadatos y resumen del rendimiento que se usará.
+    2. Libros de INPUT con páginas, tamaño y si están en el CSV; se marcan los
+       que se quieren procesar. Un buscador (empieza con, contiene, termina
+       con) filtra la lista, p. ej. "AHFCPC", y "Solo estos" marca solo los que
+       coinciden. Exportar PNG es opcional.
+    3. En proceso: avance por libro, CPU, RAM, disco y log en vivo. "Detener"
+       equivale a Ctrl+C.
+    4. Resultados: exitosos, sin metadatos, en REVIEW y por reintentar.
+  - **MARCAS DE AGUA:** logo, texto al pie y marca diagonal opcional
+    («CÁMARA DE REPRESENTANTES»), cada uno con posición, transparencia y tamaño
+    propios, y una vista previa que usa el mismo código que estampa los PDF.
+  - **CARPETAS DE TRABAJO:** INPUT, OUTPUT, REVIEW y PNG.
+  - **COMPONENTES:** RAM, hilos y gráfica del equipo ("Detectar este equipo"
+    los llena). Con ellos calcula la combinación más rápida de procesos de OCR
+    y libros en paralelo, que se puede ajustar a mano.
+- **Inyectar metadatos:** lista los PDF de `OUTPUT/SIN METADATOS` y, con un CSV
   que puede ser distinto al del procesamiento, les escribe los metadatos a los
   que estén, los pasa a OUTPUT y actualiza el registro a `OK`; avisa cuáles
-  siguen sin aparecer.
-- **MARCAS DE AGUA:** logo, texto al pie y marca diagonal opcional
-  («CÁMARA DE REPRESENTANTES»), cada uno con posición, transparencia y tamaño
-  propios, y una vista previa que usa el mismo código que estampa los PDF.
-- **CARPETAS DE TRABAJO:** INPUT, OUTPUT, REVIEW y PNG.
-- **COMPONENTES:** RAM, hilos y gráfica del equipo ("Detectar este equipo" los
-  llena). Con ellos calcula la combinación más rápida de procesos de OCR y
-  libros en paralelo, que se puede ajustar a mano.
+  siguen sin aparecer. Usa las carpetas de Procesamiento › CARPETAS DE TRABAJO.
+- **Crear contenedores GDOC:** en construcción.
 
-Tiene modo claro y oscuro, y recuerda la última configuración.
+Tiene modo claro y oscuro, y recuerda la última sección, pestaña y configuración.
 
 Los textos de marca de agua permitidos están en `TEXTOS_MARCA` y
 `MARCA_DIAGONAL`, al inicio de `interfaz/app.py`; no se editan desde la
