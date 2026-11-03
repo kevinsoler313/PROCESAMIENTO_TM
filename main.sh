@@ -82,8 +82,7 @@ PNG_DPI=300
 declare -a BOOKS=()
 OCR_JOBS=""
 
-# Texto de la marca de agua, al pie de cada página junto al logo (--texto-marca;
-# vacío = solo el logo)
+# Texto de la marca de agua, al pie de cada página (--texto-marca; vacío = sin texto)
 WATERMARK_TEXT="CONGRESO DE LA REPÚBLICA - REPOSITORIO CÁMARA DE REPRESENTANTES"
 
 # Marca diagonal opcional, ascendente de izquierda a derecha (--marca-diagonal;
@@ -263,7 +262,8 @@ check_deps() {
         command -v "$cmd" &>/dev/null || { log_error "Falta: $cmd"; missing=$((missing+1)); }
     done
     [[ -f "$VENV_DIR/bin/activate" ]] || { log_error "Falta entorno virtual: $VENV_DIR"; missing=$((missing+1)); }
-    [[ -f "$LOGO_PNG"              ]] || { log_error "Falta logo: $LOGO_PNG";  missing=$((missing+1)); }
+    # --logo "" = sin logo (la marca de agua es opcional)
+    [[ -z "$LOGO_PNG" || -f "$LOGO_PNG" ]] || { log_error "Falta logo: $LOGO_PNG";  missing=$((missing+1)); }
     [[ -f "$CSV_META"              ]] || { log_error "Falta CSV: $CSV_META";   missing=$((missing+1)); }
     [[ -f "$RUN_OCR"               ]] || { log_error "Falta: $RUN_OCR";        missing=$((missing+1)); }
     [[ -f "$MARCA_AGUA"            ]] || { log_error "Falta: $MARCA_AGUA";     missing=$((missing+1)); }
@@ -798,7 +798,7 @@ usage() {
                         en INPUT. Úsalo junto con --only-book.
     --book <id>         Procesa ese libro; se puede repetir (lo usa la interfaz).
     --csv <ruta>        CSV de metadatos (default: junto a main.sh).
-    --logo <ruta>       Logo de la marca de agua (default: recursos/logo.png).
+    --logo <ruta>       Logo de la marca de agua (default: recursos/logo.png; "" = sin logo).
     --ocr-jobs <N>      Procesos de Tesseract en paralelo (default: el de OCR.sh).
     --texto-marca <txt> Texto de la marca de agua al pie de página ("" = solo logo).
                         Default: CONGRESO DE LA REPÚBLICA - REPOSITORIO CÁMARA DE REPRESENTANTES

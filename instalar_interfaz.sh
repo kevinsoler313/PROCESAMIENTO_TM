@@ -34,15 +34,26 @@ Exec="${VENV_DIR}/bin/python" "${APP}"
 Path=${SCRIPT_DIR}
 Icon=${ICONO}
 Terminal=false
-Categories=Office;Graphics;
+Categories=Office;
 StartupWMClass=procesamiento-ocr
 EOF
 chmod +x "${MENU_DIR}/${DESKTOP_ID}"
 command -v update-desktop-database >/dev/null && update-desktop-database "$MENU_DIR" 2>/dev/null || true
 
-# Escritorio (Linux Mint lo llama "Escritorio"; xdg-user-dir da la ruta real)
-ESCRITORIO="$(xdg-user-dir DESKTOP 2>/dev/null || echo "$HOME/Desktop")"
-if [[ -d "$ESCRITORIO" ]]; then
+# Escritorio: el que muestra el sistema es el de xdg-user-dir, aunque aún no
+# exista (se crea). Sin xdg-user-dir: ~/Escritorio o ~/Desktop, el que exista.
+ESCRITORIO="$(xdg-user-dir DESKTOP 2>/dev/null || true)"
+if [[ -n "$ESCRITORIO" && "$ESCRITORIO" != "$HOME" ]]; then
+    mkdir -p "$ESCRITORIO"
+else
+    ESCRITORIO=""
+    for d in "$HOME/Escritorio" "$HOME/Desktop"; do
+        [[ -d "$d" ]] && { ESCRITORIO="$d"; break; }
+    done
+fi
+if [[ -z "$ESCRITORIO" ]]; then
+    echo "→ No se encontró la carpeta del escritorio; el programa queda solo en el menú."
+else
     cp "${MENU_DIR}/${DESKTOP_ID}" "${ESCRITORIO}/${DESKTOP_ID}"
     chmod +x "${ESCRITORIO}/${DESKTOP_ID}"
     # Marca el lanzador como confiable para que se abra con doble clic

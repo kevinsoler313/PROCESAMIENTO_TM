@@ -80,9 +80,10 @@ una barra lateral:
     3. En proceso: avance por libro, CPU, RAM, disco y log en vivo. "Detener"
        equivale a Ctrl+C.
     4. Resultados: exitosos, sin metadatos, en REVIEW y por reintentar.
-  - **MARCAS DE AGUA:** logo, texto al pie y marca diagonal opcional
-    («CÁMARA DE REPRESENTANTES»), cada uno con posición, transparencia y tamaño
-    propios, y una vista previa que usa el mismo código que estampa los PDF.
+  - **MARCAS DE AGUA:** logo, texto al pie y marca diagonal
+    («CÁMARA DE REPRESENTANTES»). Los tres son opcionales, cada uno con su
+    casilla, y tienen posición, transparencia y tamaño propios. La vista previa
+    usa el mismo código que estampa los PDF.
   - **CARPETAS DE TRABAJO:** INPUT, OUTPUT, REVIEW y PNG.
   - **COMPONENTES:** RAM, hilos y gráfica del equipo ("Detectar este equipo"
     los llena). Con ellos calcula la combinación más rápida de procesos de OCR
@@ -200,7 +201,11 @@ python3 registro_ocr_icr.py --pdf-dir /mnt/datos/OUTPUT --tiff-dir /datos/TIFF -
 |---|---|---|---|
 | Logo | arriba-izquierda | 25 % | 20 % del ancho de página |
 | Texto al pie | abajo-izquierda | 20 % | 12 pt (se reduce si no cabe) |
-| Diagonal (opcional) | centro | 12 % | 80 % de la diagonal |
+| Diagonal | centro | 12 % | 80 % de la diagonal |
+
+Los tres son opcionales: sin logo (`--logo ""`), sin texto
+(`--texto-marca ""`) y sin diagonal (si no se da `--marca-diagonal`). Por
+defecto se estampan logo y texto, y la diagonal no.
 
 El formato del JSON de `--marca-config` está en la cabecera de `marca_agua.py`.
 

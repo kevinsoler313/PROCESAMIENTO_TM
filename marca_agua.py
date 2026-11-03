@@ -2,11 +2,11 @@
 # =============================================================================
 # PROYECTO: Digitalización Libros Patrimoniales - Colombia
 # SCRIPT:   marca_agua.py  ─  MARCA DE AGUA (paso 3 de main.sh)
-# DESC:     Estampa en cada página tres elementos, cada uno con su posición,
-#           transparencia y tamaño:
-#             · logo           (por defecto arriba-izquierda)
-#             · texto al pie   (por defecto abajo-izquierda)
-#             · marca diagonal (opcional; ascendente de izquierda a derecha)
+# DESC:     Estampa en cada página tres elementos opcionales, cada uno con su
+#           posición, transparencia y tamaño:
+#             · logo           (por defecto arriba-izquierda; sin --logo = sin logo)
+#             · texto al pie   (por defecto abajo-izquierda; --texto "" = sin texto)
+#             · marca diagonal (ascendente de izquierda a derecha; sin --diagonal = sin ella)
 #           Los valores predeterminados son los que usaba main.sh antes de que
 #           la marca de agua fuera configurable. La interfaz usa vista_previa()
 #           para mostrar el resultado con los mismos cálculos.
@@ -156,6 +156,12 @@ def dibujar(c, pw, ph, cfg, logo):
         c.restoreState()
 
 
+def hay_marca(cfg, logo):
+    """True si al menos un elemento se va a estampar."""
+    return ((logo is not None and cfg["logo"]["opacidad"] > 0)
+            or any((cfg[e].get("texto") or "").strip() and cfg[e]["opacidad"] > 0 for e in ("texto", "diagonal")))
+
+
 def overlay(pw, ph, cfg, logo):
     from reportlab.pdfgen import canvas
     pkt = BytesIO()
@@ -173,6 +179,16 @@ def aplicar(entrada, salida, logo_ruta, cfg):
     writer = PdfWriter()
     if reader.metadata:
         writer.add_metadata(reader.metadata)
+
+    # Sin ningún elemento (todos son opcionales) el PDF sale igual, sin overlay
+    if not hay_marca(cfg, logo):
+        for page in reader.pages:
+            writer.add_page(page)
+        with open(salida, "wb") as f:
+            writer.write(f)
+        print(f"[WATERMARK] {len(reader.pages)} págs | sin marca de agua (ningún elemento activo)",
+              file=sys.stderr)
+        return
 
     # Cache de overlays por tamaño de página: los libros escaneados suelen tener
     # un solo tamaño, así que el overlay se genera una vez y se reutiliza.

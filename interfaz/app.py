@@ -114,6 +114,7 @@ SEDES = CG.SEDES
 
 TEXTOS_MARCA = [
     "CONGRESO DE LA REPÚBLICA - REPOSITORIO CÁMARA DE REPRESENTANTES",
+    "DIGITALIZADO CAMARA DE REPRESENTANTES_BIBLIOTECA NACIONAL",
 ]
 # Marca diagonal opcional (ascendente de izquierda a derecha), también fija
 MARCA_DIAGONAL = "CÁMARA DE REPRESENTANTES"
@@ -1338,13 +1339,21 @@ class Ventana(QMainWindow):
         cols.setVerticalSpacing(4)
         self.marca_ctrl = {}
 
-        # Encabezado de cada columna: el elemento en sí
-        cols.addWidget(QLabel("Logo", objectName="subtitulo"), 0, 0)
-        caja, self.logo_img, self.logo_nombre, self.logo_detalle, b = self._selector("Logo")
-        b.clicked.connect(self.elegir_logo)
+        # Encabezado de cada columna: casilla para usar o no el elemento (los tres
+        # son opcionales) y el elemento en sí
+        self.marca_activa = {}
+        for col, (elem, nombre) in enumerate((("logo", "Logo"), ("texto", "Texto al pie"),
+                                              ("diagonal", "Marca diagonal"))):
+            casilla = QCheckBox(nombre)
+            casilla.setStyleSheet("font-weight:700;")
+            casilla.setToolTip(f"Opcional: desmárcalo para no estampar {nombre.lower()}.")
+            cols.addWidget(casilla, 0, col)
+            self.marca_activa[elem] = casilla
+        self.diagonal = self.marca_activa["diagonal"]
+        caja, self.logo_img, self.logo_nombre, self.logo_detalle, self.btn_logo = self._selector("Logo")
+        self.btn_logo.clicked.connect(self.elegir_logo)
         cols.addWidget(caja, 1, 0)
 
-        cols.addWidget(QLabel("Texto al pie", objectName="subtitulo"), 0, 1)
         caja_txt = QFrame(objectName="selector")
         ht = QVBoxLayout(caja_txt)
         ht.setContentsMargins(10, 8, 10, 8)
@@ -1360,14 +1369,13 @@ class Ventana(QMainWindow):
         ht.addWidget(self.texto_marca)
         cols.addWidget(caja_txt, 1, 1)
 
-        cols.addWidget(QLabel("Marca diagonal", objectName="subtitulo"), 0, 2)
         caja_diag = QFrame(objectName="selector")
         hd = QVBoxLayout(caja_diag)
         hd.setContentsMargins(10, 8, 10, 8)
-        self.diagonal = QCheckBox(f"«{MARCA_DIAGONAL}»")
-        self.diagonal.setToolTip("Opcional: texto grande y tenue, en diagonal de abajo-izquierda\n"
-                                 "a arriba-derecha, en todas las páginas.")
-        hd.addWidget(self.diagonal)
+        self.diagonal_texto = QLabel(f"«{MARCA_DIAGONAL}»")
+        self.diagonal_texto.setToolTip("Texto grande y tenue, en diagonal de abajo-izquierda\n"
+                                       "a arriba-derecha, en todas las páginas.")
+        hd.addWidget(self.diagonal_texto)
         cols.addWidget(caja_diag, 1, 2)
 
         # Controles: posición, transparencia y tamaño de cada elemento
@@ -1408,7 +1416,8 @@ class Ventana(QMainWindow):
         der.addStretch()
         h.addLayout(der)
 
-        self.diagonal.toggled.connect(self._marca_cambiada)
+        for casilla in self.marca_activa.values():
+            casilla.toggled.connect(self._marca_cambiada)
         self.texto_marca.currentIndexChanged.connect(self._marca_cambiada)
         self.timer_preview = QTimer(self, singleShot=True, interval=150, timeout=self._pintar_preview)
         lay.addWidget(bloque)
@@ -1881,19 +1890,23 @@ class Ventana(QMainWindow):
     def _marca_cambiada(self, *_):
         if self._aplicando:
             return
-        activa = self.diagonal.isChecked() and self.btn_iniciar.isEnabled()
-        for w in self.marca_ctrl["diagonal"].values():
-            w.setEnabled(activa)
+        libre = self.btn_iniciar.isEnabled()
+        propios = {"logo": [self.btn_logo], "texto": [self.texto_marca], "diagonal": [self.diagonal_texto]}
+        for elem, casilla in self.marca_activa.items():
+            for w in [*self.marca_ctrl[elem].values(), *propios[elem]]:
+                w.setEnabled(casilla.isChecked() and libre)
+            self.ajustes.setValue(elem if elem == "diagonal" else f"{elem}_activo",
+                                  "true" if casilla.isChecked() else "false")
         self.ajustes.setValue("marca_config", json.dumps(self._config_marca()))
-        self.ajustes.setValue("diagonal", "true" if self.diagonal.isChecked() else "false")
         self.timer_preview.start()
 
     def _pintar_preview(self):
         cfg = MA.combinar(self._config_marca())
-        cfg["texto"]["texto"] = self.texto_marca.currentText()
+        cfg["texto"]["texto"] = self.texto_marca.currentText() if self.marca_activa["texto"].isChecked() else ""
         cfg["diagonal"]["texto"] = MARCA_DIAGONAL if self.diagonal.isChecked() else ""
+        logo = self.logo_ruta if self.marca_activa["logo"].isChecked() else None
         try:
-            datos = MA.vista_previa(cfg, self.logo_ruta)
+            datos = MA.vista_previa(cfg, logo)
         except Exception as e:      # un logo dañado no debe tumbar la interfaz
             self.preview.setText(f"Sin vista previa:\n{e}")
             return
@@ -2062,8 +2075,6 @@ class Ventana(QMainWindow):
             self.cargar_logo(logo)
         self.png.setChecked(self.ajustes.value("png", "false") == "true")
 
-        indice = self.texto_marca.findText(self.ajustes.value("texto_marca", ""))
-        self.texto_marca.setCurrentIndex(max(indice, 0))
         indice = self.modo_busqueda.findData(self.ajustes.value("modo_busqueda", "inicio"))
         self.modo_busqueda.setCurrentIndex(max(indice, 0))
 
@@ -2072,9 +2083,16 @@ class Ventana(QMainWindow):
             marca = json.loads(self.ajustes.value("marca_config", "{}") or "{}")
         except ValueError:
             marca = {}
-        diagonal = self.ajustes.value("diagonal", "false") == "true"
+        # Logo y texto, activos salvo que se hayan desmarcado; la diagonal, al revés
+        activos = {"logo": self.ajustes.value("logo_activo", "true") == "true",
+                   "texto": self.ajustes.value("texto_activo", "true") == "true",
+                   "diagonal": self.ajustes.value("diagonal", "false") == "true"}
+        # Todo con _aplicando: cada cambio guarda, y no debe pisar lo que falta leer
         self._aplicando = True
-        self.diagonal.setChecked(diagonal)
+        indice = self.texto_marca.findText(self.ajustes.value("texto_marca", ""))
+        self.texto_marca.setCurrentIndex(max(indice, 0))
+        for elem, casilla in self.marca_activa.items():
+            casilla.setChecked(activos[elem])
         self._aplicando = False
         self._poner_marca(marca)
 
@@ -2391,8 +2409,8 @@ class Ventana(QMainWindow):
         faltan = []
         if self.codigos_csv is None:
             faltan.append("el CSV de metadatos")
-        if not self.logo_ruta:
-            faltan.append("el logo (pestaña MARCAS DE AGUA)")
+        if self.marca_activa["logo"].isChecked() and not self.logo_ruta:
+            faltan.append("el logo (pestaña MARCAS DE AGUA), o desmarcar Logo")
         if not seleccion:
             faltan.append("al menos un libro")
         if not self.carpetas["input"].is_dir():
@@ -2415,12 +2433,14 @@ class Ventana(QMainWindow):
         self.ajustes.setValue("ocr_jobs", self.ocr_slider.value())
         self.ajustes.setValue("png", "true" if self.png.isChecked() else "false")
 
-        args = ["--csv", self.ajustes.value("csv"), "--logo", self.logo_ruta,
+        logo = self.logo_ruta if self.marca_activa["logo"].isChecked() else ""
+        args = ["--csv", self.ajustes.value("csv"), "--logo", logo,
                 "--jobs", str(self.jobs.value()), "--ocr-jobs", str(self.ocr_slider.value())]
         if self.png.isChecked():
             args.append("--png")
         self.ajustes.setValue("texto_marca", self.texto_marca.currentText())
-        args += ["--texto-marca", self.texto_marca.currentText()]
+        args += ["--texto-marca",
+                 self.texto_marca.currentText() if self.marca_activa["texto"].isChecked() else ""]
         if self.diagonal.isChecked():
             args += ["--marca-diagonal", MARCA_DIAGONAL]
         MARCA_JSON.parent.mkdir(parents=True, exist_ok=True)
@@ -2459,7 +2479,7 @@ class Ventana(QMainWindow):
         self.btn_detener.setEnabled(si)
         for w in (self.tabla, self.ocr_slider, self.jobs, self.png, self.ram, self.hilos,
                   self.gpu, self.btn_recomendado, self.btn_carpetas_def, *self.botones_carpeta,
-                  self.texto_marca, self.diagonal, self.btn_marca_def,
+                  self.texto_marca, *self.marca_activa.values(), self.btn_logo, self.btn_marca_def,
                   *(w for c in self.marca_ctrl.values() for w in c.values())):
             w.setEnabled(not si)
         self._activar_png()
