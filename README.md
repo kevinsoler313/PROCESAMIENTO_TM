@@ -24,7 +24,11 @@ INPUT/<libro>/*.tif
           está en el CSV), lo registra y recién entonces borra los TIFF
 ```
 
-## Carpetas de datos (por defecto en `/mnt/datos`)
+## Carpetas de datos
+
+Cada equipo las tiene donde quiera y las elige en la interfaz. `/mnt/datos` es
+solo la sugerencia del botón "Usar /mnt/datos" y el valor por defecto de
+`main.sh` desde la terminal.
 
 | Carpeta | Contenido |
 |---|---|
@@ -41,16 +45,25 @@ crean junto a OUTPUT, para que TEMPORALES quede en su mismo disco.
 
 ## Instalación
 
+En un equipo nuevo (Ubuntu, Linux Mint o WSL):
+
 ```bash
-sudo apt install -y ocrmypdf libimage-exiftool-perl poppler-utils \
-    tesseract-ocr tesseract-ocr-spa ghostscript parallel python3-venv \
-    libxcb-cursor0
-sudo mkdir -p /mnt/datos && sudo chown "$USER" /mnt/datos
-bash instalar_interfaz.sh     # crea ocr_env, instala requirements.txt y el lanzador
+git clone https://github.com/kevinsoler313/PROCESAMIENTO_TM.git
+cd PROCESAMIENTO_TM && bash instalar.sh
 ```
 
-`instalar_interfaz.sh` deja "Procesamiento OCR", con su ícono, en el menú de
-aplicaciones y en el escritorio.
+`instalar.sh` hace tres cosas:
+
+1. Instala los paquetes del sistema que falten (pide la contraseña una vez):
+   git, ocrmypdf, exiftool, poppler-utils, Tesseract con español,
+   Ghostscript, GNU parallel, python3-venv y libxcb-cursor0.
+2. Corre `instalar_interfaz.sh`, que crea `ocr_env` con `requirements.txt` y
+   deja "Procesamiento OCR", con su ícono, en el menú de aplicaciones y en el
+   escritorio.
+3. Verifica que cada herramienta responda y muestra ✅ o ❌.
+
+Se puede volver a correr sin problema. No crea carpetas de datos: INPUT,
+OUTPUT, REVIEW y PNG se eligen en la interfaz.
 
 ## Interfaz de escritorio
 
