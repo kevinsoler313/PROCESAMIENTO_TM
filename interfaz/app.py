@@ -59,7 +59,7 @@ import actualizacion as ACT  # noqa: E402
 VERSION = ACT.version_local()
 TITULO = f"Procesamiento OCR {VERSION}"
 
-PREVIEW_W, PREVIEW_H = 150, 212    # proporción A4
+PREVIEW_W, PREVIEW_H = 440, 622    # proporción A4; va debajo de los controles
 
 DATOS_DIR = Path(os.environ.get("DATOS_DIR", "/mnt/datos"))
 
@@ -1320,7 +1320,7 @@ class Ventana(QMainWindow):
         """Logo, texto al pie y marca diagonal: cada uno con posición, transparencia
         y tamaño propios, y una vista previa que usa los mismos cálculos que el PDF."""
         bloque = QFrame(objectName="selector")
-        h = QHBoxLayout(bloque)
+        h = QVBoxLayout(bloque)             # arriba los controles, abajo la vista previa
         h.setContentsMargins(14, 10, 14, 12)
         h.setSpacing(18)
 
@@ -1402,18 +1402,16 @@ class Ventana(QMainWindow):
             self.marca_ctrl[elem] = {"pos": pos, "trans": trans, "tam": tam}
             cols.setColumnStretch(col, 1)
         izq.addLayout(cols)
-        h.addLayout(izq, 1)
+        h.addLayout(izq)
 
         der = QVBoxLayout()
-        der.setSpacing(4)
-        der.addWidget(QLabel("Vista previa", objectName="subtitulo"))
+        der.setSpacing(6)
+        der.addWidget(QLabel("Vista previa · página A4 de ejemplo", objectName="subtitulo"))
         self.preview = QLabel()
         self.preview.setFixedSize(PREVIEW_W, PREVIEW_H)
         self.preview.setAlignment(Qt.AlignCenter)
         self.preview.setStyleSheet("background:#ffffff;border:1px solid #b9cbe0;")
-        der.addWidget(self.preview)
-        der.addWidget(QLabel("Página A4 de ejemplo", objectName="sub"))
-        der.addStretch()
+        der.addWidget(self.preview, 0, Qt.AlignHCenter)
         h.addLayout(der)
 
         for casilla in self.marca_activa.values():
@@ -1915,7 +1913,12 @@ class Ventana(QMainWindow):
         buf.open(QIODevice.ReadOnly)
         doc = QPdfDocument(self)
         doc.load(buf)
-        self.preview.setPixmap(QPixmap.fromImage(doc.render(0, QSize(PREVIEW_W - 2, PREVIEW_H - 2))))
+        # Se dibuja a la resolución real de la pantalla para que se vea nítida
+        escala = self.preview.devicePixelRatioF()
+        imagen = doc.render(0, QSize(round((PREVIEW_W - 2) * escala), round((PREVIEW_H - 2) * escala)))
+        pix = QPixmap.fromImage(imagen)
+        pix.setDevicePixelRatio(escala)
+        self.preview.setPixmap(pix)
         doc.close()
         buf.close()
 
