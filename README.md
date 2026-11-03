@@ -199,6 +199,7 @@ Todos los equipos usan los mismos:
 |---|---|
 | `recursos/TechnoMart Funza - TEMP.csv` | CSV de metadatos por libro, sin encabezado: `codigo,fondo,subfondo,equipo,resolucion` |
 | `recursos/logo.png` | Logo de la marca de agua |
+| `plantillas/layout_importar_contenedores.xls` | Plantilla oficial de GDOC para importar contenedores |
 | `plantillas/contenedores_GDOC.csv` | Encabezados del CSV de Crear contenedores GDOC |
 | `plantillas/registro_OCR-ICR.csv` | Encabezados del CSV de Crear registro OCR-ICR |
 
