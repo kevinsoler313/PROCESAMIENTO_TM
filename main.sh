@@ -53,7 +53,8 @@ VENV_DIR="${SCRIPT_DIR}/ocr_env"
 RUN_OCR="${SCRIPT_DIR}/run_ocr.sh"
 MARCA_AGUA="${SCRIPT_DIR}/marca_agua.py"
 
-# Lectura del CSV y escritura de metadatos, compartidas con inyectar_metadatos.sh
+# Lectura del CSV y escritura de metadatos, compartidas con inyectar_metadatos.sh.
+# META_CONFIG (--meta-config): qué columnas van en cada campo; vacío = lo de siempre
 # shellcheck source=metadatos.sh
 source "${SCRIPT_DIR}/metadatos.sh" || { echo "Falta ${SCRIPT_DIR}/metadatos.sh" >&2; exit 1; }
 
@@ -267,6 +268,10 @@ check_deps() {
     [[ -f "$CSV_META"              ]] || { log_error "Falta CSV: $CSV_META";   missing=$((missing+1)); }
     [[ -f "$RUN_OCR"               ]] || { log_error "Falta: $RUN_OCR";        missing=$((missing+1)); }
     [[ -f "$MARCA_AGUA"            ]] || { log_error "Falta: $MARCA_AGUA";     missing=$((missing+1)); }
+    [[ -f "$META_PY"               ]] || { log_error "Falta: $META_PY";        missing=$((missing+1)); }
+    if [[ -n "$META_CONFIG" && ! -f "$META_CONFIG" ]]; then
+        log_error "Falta configuración de metadatos: $META_CONFIG"; missing=$((missing+1))
+    fi
     if [[ -n "$MARCA_CONFIG" && ! -f "$MARCA_CONFIG" ]]; then
         log_error "Falta configuración de marca de agua: $MARCA_CONFIG"; missing=$((missing+1))
     fi
@@ -284,7 +289,8 @@ check_deps() {
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CARGAR ÍNDICE DEL CSV DE METADATOS
-# (Columnas: código, fondo, subfondo, equipo, resolución)
+# (columnas y campos según --meta-config; sin él, código, fondo, subfondo,
+#  equipo, resolución)
 # ─────────────────────────────────────────────────────────────────────────────
 
 TEMP_META=""
@@ -293,7 +299,7 @@ load_csv_index() {
     meta_indice "$CSV_META" > "$TEMP_META"
 
     [[ -s "$TEMP_META" ]] || { log_error "No se pudo leer el CSV de metadatos."; exit 1; }
-    local count; count=$(cut -d'|' -f1 "$TEMP_META" | sort -u | wc -l)
+    local count; count=$(cut -d"$META_SEP" -f1 "$TEMP_META" | sort -u | wc -l)
     log_info "CSV cargado: ${count} códigos únicos."
 }
 cleanup_temp() { if [[ -n "$TEMP_META" && -f "$TEMP_META" ]]; then rm -f "$TEMP_META"; fi; }
@@ -472,9 +478,7 @@ step5_metadata() {
         return 0
     fi
 
-    local subfondo equipo
-    IFS='|' read -r _ _ subfondo equipo _ <<< "$meta"
-    log_info "[${book_name}] Insertando metadatos: Subfondo=$subfondo | Equipo=$equipo"
+    log_info "[${book_name}] Insertando metadatos: Title=$(meta_titulo "$meta")"
     meta_escribir "$book_name" "$pdf_path" "$meta"     && log_ok "[${book_name}] Metadatos insertados."     || log_warn "[${book_name}] Advertencia: exiftool no pudo escribir algunos metadatos."
 }
 
@@ -804,6 +808,8 @@ usage() {
                         Default: CONGRESO DE LA REPÚBLICA - REPOSITORIO CÁMARA DE REPRESENTANTES
     --marca-diagonal <txt>  Marca diagonal opcional (de abajo-izquierda a arriba-derecha),
                         p. ej. "CÁMARA DE REPRESENTANTES". Default: sin marca diagonal.
+    --meta-config <json>   Qué columna del CSV es el código y cómo se arma cada campo
+                        del PDF (formato en la cabecera de metadatos.py). Default: los de siempre.
     --marca-config <json>  Posición, transparencia y tamaño de logo, texto y diagonal
                         (formato en la cabecera de marca_agua.py). Default: los de siempre.
     --input-dir <ruta>     Carpeta INPUT       (default: /mnt/datos/INPUT)
@@ -862,6 +868,7 @@ parse_args() {
             --texto-marca)      WATERMARK_TEXT="$2"; shift 2 ;;
             --marca-diagonal)   DIAGONAL_TEXT="$2"; shift 2 ;;
             --marca-config)     MARCA_CONFIG="$2"; shift 2 ;;
+            --meta-config)      META_CONFIG="$2"; shift 2 ;;
             --input-dir)        INPUT_DIR="$2"; shift 2 ;;
             --output-dir)       OUTPUT_DIR="$2"; shift 2 ;;
             --temp-dir)         TEMP_DIR="$2"; shift 2 ;;

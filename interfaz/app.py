@@ -27,7 +27,7 @@ from PySide6.QtCore import (QBuffer, QByteArray, QIODevice, QObject, QSettings, 
 from PySide6.QtGui import QColor, QDesktopServices, QFont, QFontDatabase, QIcon, QPalette, QPixmap
 from PySide6.QtPdf import QPdfDocument
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout,
+    QApplication, QCheckBox, QComboBox, QMenu, QFileDialog, QFrame, QGridLayout, QHBoxLayout,
     QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit,
     QProgressBar, QPushButton, QScrollArea, QSlider, QSpinBox, QStackedWidget, QTabWidget, QTableWidget,
     QTableWidgetItem, QVBoxLayout, QWidget,
@@ -45,6 +45,8 @@ ICONO = Path(__file__).resolve().parent / "icono.png"
 # Ajustes guardados (QSettings). PROCESAMIENTO_PERFIL permite probar sin tocar los del usuario.
 PERFIL = os.environ.get("PROCESAMIENTO_PERFIL", "ProcesamientoOCR")
 MARCA_JSON = SCRIPT_DIR / "logs" / "marca_interfaz.json"   # lo que se pasa a main.sh
+META_JSON = SCRIPT_DIR / "logs" / "meta_interfaz.json"     # columnas → campos del PDF
+META_JSON_INY = SCRIPT_DIR / "logs" / "meta_inyectar.json"  # lo mismo, para Inyectar
 # CSV de metadatos y logo que vienen con el programa; se usan si no se eligió otro
 CSV_INCLUIDO = SCRIPT_DIR / "recursos" / "TechnoMart Funza - TEMP.csv"
 LOGO_INCLUIDO = SCRIPT_DIR / "recursos" / "logo.png"
@@ -53,6 +55,7 @@ LOGO_INCLUIDO = SCRIPT_DIR / "recursos" / "logo.png"
 sys.path.insert(0, str(SCRIPT_DIR))
 import marca_agua as MA  # noqa: E402
 import contenedores_gdoc as CG  # noqa: E402
+import metadatos as MD  # noqa: E402
 import registro_ocr_icr as RO  # noqa: E402
 import actualizacion as ACT  # noqa: E402
 
@@ -176,7 +179,6 @@ def detectar_hardware():
     return ram, hilos, gpus
 
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
-CODIGO_OK = re.compile(r"^[A-Za-z0-9._-]+$")
 
 # Fases que se reconocen en el log de main.sh, en orden. (texto, paso, % del libro)
 FASES = [
@@ -458,40 +460,268 @@ def formato_gb(nbytes):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CSV DE METADATOS (mismas reglas que load_csv_index de main.sh)
+# CSV DE METADATOS → CAMPOS DEL PDF (Procesamiento › METADATOS e Inyectar)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def leer_csv(ruta):
-    """Devuelve (códigos, nº de códigos, avisos). Columnas: código, fondo, subfondo, equipo, resolución."""
-    codigos, vistos, avisos = set(), {}, []
-    vacias = incompletas = res_raras = 0
-    with open(ruta, encoding="utf-8", errors="replace") as f:
-        for n, linea in enumerate(f, 1):
-            campos = [c.strip() for c in linea.rstrip("\r\n").split(",")]
-            if not any(campos):
-                vacias += 1
+class PanelMetadatos(QObject):
+    """CSV de metadatos, qué columna es el código del libro y cómo se arma cada campo
+    del PDF. Procesamiento e Inyectar tienen uno cada uno, con su CSV y su
+    configuración guardados aparte en los ajustes."""
+    cambiado = Signal()       # otro CSV o cambió la configuración: hay que recontar
+
+    def __init__(self, ventana, antetitulo, titulo_csv, clave_csv, clave_cfg, cfg_inicial=None):
+        super().__init__(ventana)
+        self.v, self.ajustes = ventana, ventana.ajustes
+        self.clave_csv, self.clave_cfg = clave_csv, clave_cfg
+        self.titulo_csv = titulo_csv
+        self.cfg = self._leer_cfg(cfg_inicial)
+        self.filas, self.codigos, self.n_codigos, self.avisos = [], None, 0, []
+        self._pintando = False
+
+        # ── CSV ──
+        lay, _ = ventana._card(antetitulo, titulo_csv)
+        grid = QGridLayout()
+        caja, _, self.nombre, self.detalle, b = ventana._selector("CSV")
+        b.clicked.connect(self.elegir)
+        self.detalle.linkActivated.connect(
+            lambda _: QMessageBox.information(ventana, "Avisos del CSV", "\n".join(self.avisos)))
+        grid.addWidget(caja, 0, 0)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
+        lay.addLayout(grid)
+        self.lay_csv = lay
+        self.widgets = [b]
+
+        # ── Columnas del CSV ──
+        lay, _ = ventana._card(antetitulo, "Columnas del CSV")
+        self.info = QLabel(objectName="sub")
+        self.info.setWordWrap(True)
+        lay.addWidget(self.info)
+        fila = QHBoxLayout()
+        fila.setSpacing(12)
+        self.encabezado = QCheckBox("La primera fila es encabezado (nombres de columna)")
+        self.encabezado.toggled.connect(self._encabezado_cambiado)
+        fila.addWidget(self.encabezado)
+        fila.addSpacing(24)
+        fila.addWidget(QLabel("Código del libro", objectName="subtitulo"))
+        self.codigo = QComboBox()
+        self.codigo.setMinimumWidth(260)
+        self.codigo.setToolTip("Columna que se compara con el nombre del libro")
+        self.codigo.currentIndexChanged.connect(self._codigo_cambiado)
+        fila.addWidget(self.codigo)
+        fila.addStretch()
+        lay.addLayout(fila)
+        self.tabla = QTableWidget(0, 0)
+        self.tabla.verticalHeader().setVisible(False)
+        self.tabla.setSelectionMode(QTableWidget.NoSelection)
+        self.tabla.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.tabla.setFocusPolicy(Qt.NoFocus)
+        self.tabla.setAlternatingRowColors(True)
+        self.tabla.verticalHeader().setDefaultSectionSize(30)
+        self.tabla.setFixedHeight(30 * 6 + 8)
+        lay.addWidget(self.tabla)
+
+        # ── Campos del PDF ──
+        lay, fila = ventana._card(antetitulo, "Campos del PDF")
+        b = QPushButton("Restablecer predeterminados")
+        b.clicked.connect(self._predeterminado)
+        fila.addWidget(b)
+        self.widgets += [self.encabezado, self.codigo, b]
+        nota = QLabel("Cada campo es texto libre con columnas del CSV: «+ Columna» agrega {N} donde está "
+                      "el cursor. Ej.: Congreso de la República - {3}. Un campo vacío no se escribe en el "
+                      "PDF.", objectName="sub")
+        nota.setWordWrap(True)
+        lay.addWidget(nota)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(2)
+        self.plantilla, self.ejemplo = {}, {}
+        for n, (campo, nombre) in enumerate(MD.CAMPOS):
+            etiqueta = QLabel(nombre, objectName="subtitulo")
+            etiqueta.setToolTip(f"Campo {campo} del PDF")
+            grid.addWidget(etiqueta, 2 * n, 0)
+            linea = QLineEdit()
+            linea.setPlaceholderText("(no se escribe)")
+            linea.textChanged.connect(self._plantilla_cambiada)
+            grid.addWidget(linea, 2 * n, 1)
+            boton = QPushButton("+ Columna")
+            boton.clicked.connect(lambda _=False, l=linea, b=boton: self._menu_columnas(l, b))
+            grid.addWidget(boton, 2 * n, 2)
+            ejemplo = QLabel(objectName="sub")
+            ejemplo.setWordWrap(True)          # un ejemplo largo no ensancha la página
+            ejemplo.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            grid.addWidget(ejemplo, 2 * n + 1, 1, 1, 2)
+            self.plantilla[campo], self.ejemplo[campo] = linea, ejemplo
+            self.widgets += [linea, boton]
+        grid.setColumnStretch(1, 1)
+        lay.addLayout(grid)
+        self.timer = QTimer(self, singleShot=True, interval=400, timeout=self._aplicar)
+        self.pintar()
+
+    # ── Configuración guardada ──
+
+    def _leer_cfg(self, cfg_inicial):
+        guardada = self.ajustes.value(self.clave_cfg, "")
+        try:
+            return MD.combinar(json.loads(guardada) if guardada else (cfg_inicial or {}))
+        except ValueError:
+            return MD.combinar(cfg_inicial or {})
+
+    def _guardar(self, repintar=False):
+        self.ajustes.setValue(self.clave_cfg, json.dumps(self.cfg, ensure_ascii=False))
+        if repintar:
+            self.pintar()
+        self._aplicar()
+
+    def escribir_json(self, ruta):
+        """La configuración en un archivo, para pasarla a main.sh o inyectar_metadatos.sh."""
+        ruta = Path(ruta)
+        ruta.parent.mkdir(parents=True, exist_ok=True)
+        ruta.write_text(json.dumps(self.cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+        return str(ruta)
+
+    @property
+    def ruta(self):
+        return self.ajustes.value(self.clave_csv, "")
+
+    # ── CSV ──
+
+    def elegir(self):
+        inicio = self.ruta or self.ajustes.value("csv", "") or str(Path.home())
+        ruta, _ = QFileDialog.getOpenFileName(self.v, self.titulo_csv, inicio, "CSV (*.csv);;Todos (*)")
+        if ruta:
+            self.cargar(ruta)
+
+    def cargar(self, ruta, avisar=True):
+        try:
+            filas = MD.leer_filas(ruta)
+        except OSError as e:
+            QMessageBox.warning(self.v, self.titulo_csv, f"No se pudo leer el CSV.\n{e}")
+            return
+        if not filas:
+            QMessageBox.warning(self.v, self.titulo_csv, "El archivo está vacío.")
+            return
+        self.filas = filas
+        self.ajustes.setValue(self.clave_csv, ruta)
+        self.nombre.setText(Path(ruta).name)
+        self.pintar()
+        self._revisar()
+        if avisar and not self.codigos:
+            QMessageBox.information(
+                self.v, self.titulo_csv,
+                "No se encontraron códigos de libro en la columna elegida. Revisa en «Columnas del "
+                "CSV» qué columna es el código del libro.")
+
+    def _revisar(self):
+        if not self.filas:
+            return
+        self.codigos, self.n_codigos, self.avisos = MD.revisar(self.filas, self.cfg)
+        self.pintar_detalle()
+        self.cambiado.emit()
+
+    def pintar_detalle(self):
+        # El enlace va en HTML, así que su color se pone a mano según el tema
+        if self.codigos is None:
+            return
+        detalle = f"{self.n_codigos:,} códigos".replace(",", ".")
+        if self.avisos:
+            color = TEMAS[self.v.tema]["warn"][1]
+            detalle += f' · <a href="#" style="color:{color};">{len(self.avisos)} aviso(s)</a>'
+        self.detalle.setText(detalle)
+
+    # ── Columnas y plantillas ──
+
+    def _columnas(self):
+        """[(n, nombre, ejemplo)] de las columnas del CSV cargado."""
+        encabezado, datos = MD.separar(self.filas, self.cfg)
+        ejemplo = datos[0] if datos else []
+        return [(n, (MD.celda(encabezado, n) if encabezado else "") or f"Columna {n}", MD.celda(ejemplo, n))
+                for n in range(1, MD.num_columnas(self.filas) + 1)]
+
+    def pintar(self):
+        """Refleja self.cfg y el CSV cargado en los controles, sin volver a guardar."""
+        self._pintando = True
+        hay_csv = bool(self.filas)
+        self.encabezado.setChecked(MD.con_encabezado(self.filas, self.cfg) if hay_csv
+                                   else bool(self.cfg.get("encabezado")))
+        columnas = self._columnas()
+        self.codigo.clear()
+        n_guardada = int(self.cfg["codigo"])
+        for n, nombre, ejemplo in columnas or [(n_guardada, f"Columna {n_guardada}", "")]:
+            self.codigo.addItem(f"{{{n}}} · {nombre}" + (f"  (ej. {ejemplo})" if ejemplo else ""), n)
+        self.codigo.setCurrentIndex(max(self.codigo.findData(n_guardada), 0))
+        for campo, linea in self.plantilla.items():
+            if linea.text() != self.cfg["campos"].get(campo, ""):
+                linea.setText(self.cfg["campos"].get(campo, ""))
+
+        _, datos = MD.separar(self.filas, self.cfg)
+        self.tabla.clear()
+        self.tabla.setColumnCount(len(columnas))
+        self.tabla.setHorizontalHeaderLabels([f"{{{n}}} · {nombre}" for n, nombre, _ in columnas])
+        self.tabla.setRowCount(min(5, len(datos)))
+        for i, fila in enumerate(datos[:5]):
+            for n in range(1, len(columnas) + 1):
+                self.tabla.setItem(i, n - 1, QTableWidgetItem(MD.celda(fila, n)))
+        self.tabla.resizeColumnsToContents()
+        self.tabla.setVisible(hay_csv)
+        if hay_csv:
+            self.info.setText(f"CSV: {Path(self.ruta).name} · {len(columnas)} columnas · "
+                              f"{len(datos):,} filas de datos. Vista de las primeras 5:".replace(",", "."))
+        else:
+            self.info.setText("Elige el CSV arriba para ver sus columnas.")
+        self._ejemplos()
+        self._pintando = False
+
+    def _ejemplos(self):
+        _, datos = MD.separar(self.filas, self.cfg)
+        fila = datos[0] if datos else None
+        codigo = MD.celda(fila, int(self.cfg["codigo"])) if fila else ""
+        for campo, etiqueta in self.ejemplo.items():
+            plantilla = self.plantilla[campo].text()
+            if fila is None or not plantilla.strip():
+                etiqueta.setText("")
                 continue
-            codigo = campos[0]
-            if not CODIGO_OK.match(codigo):
-                continue
-            codigos.add(codigo)
-            if codigo.isdigit():
-                codigos.add(f"{int(codigo):06d}")
-            if codigo in vistos:
-                avisos.append(f"{codigo} repetido (líneas {vistos[codigo]} y {n})")
-            vistos.setdefault(codigo, n)
-            campos += [""] * (5 - len(campos))
-            if not all(campos[1:5]):
-                incompletas += 1
-            elif campos[4].lower() != "300 ppp":
-                res_raras += 1
-    if incompletas:
-        avisos.append(f"{incompletas} fila(s) con campos vacíos")
-    if res_raras:
-        avisos.append(f"{res_raras} fila(s) con resolución distinta de '300 ppp'")
-    if vacias:
-        avisos.append(f"{vacias} fila(s) vacías")
-    return codigos, len(vistos), avisos
+            fuera = [n for n in MD.COLUMNA.findall(plantilla) if int(n) > MD.num_columnas(self.filas)]
+            etiqueta.setText(f"Ej. {codigo}: {MD.armar(plantilla, fila)}"
+                             + (f"   ⚠ el CSV no tiene la columna {{{fuera[0]}}}" if fuera else ""))
+
+    def _menu_columnas(self, linea, boton):
+        menu = QMenu(self.v)
+        columnas = self._columnas()
+        if not columnas:
+            menu.addAction("Primero elige el CSV").setEnabled(False)
+        for n, nombre, ejemplo in columnas:
+            accion = menu.addAction(f"{{{n}}} · {nombre}" + (f"  — {ejemplo[:40]}" if ejemplo else ""))
+            accion.triggered.connect(lambda _=False, n=n: (linea.insert(f"{{{n}}}"), linea.setFocus()))
+        menu.exec(boton.mapToGlobal(boton.rect().bottomLeft()))
+
+    def _encabezado_cambiado(self, valor):
+        if not self._pintando:
+            self.cfg["encabezado"] = bool(valor)
+            self._guardar(repintar=True)
+
+    def _codigo_cambiado(self, *_):
+        if self._pintando or self.codigo.currentData() is None:
+            return
+        self.cfg["codigo"] = int(self.codigo.currentData())
+        self._guardar()
+        self._ejemplos()
+
+    def _plantilla_cambiada(self, *_):
+        if self._pintando:
+            return
+        for campo, linea in self.plantilla.items():
+            self.cfg["campos"][campo] = linea.text()
+        self._ejemplos()
+        self.timer.start()            # guarda y revisa el CSV al dejar de escribir
+
+    def _predeterminado(self):
+        self.cfg = MD.combinar()
+        self._guardar(repintar=True)
+
+    def _aplicar(self):
+        self.ajustes.setValue(self.clave_cfg, json.dumps(self.cfg, ensure_ascii=False))
+        self._revisar()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -567,10 +797,7 @@ class Ventana(QMainWindow):
         self.resize(1320, 940)
         self.ajustes = QSettings("TechnoMart", PERFIL)
 
-        self.codigos_csv = None
         self.logo_ruta = None
-        self.avisos_csv = []
-        self.n_codigos = 0
         self.tema = "claro"
         self._aplicando = False   # True mientras la app cambia valores (no es el usuario)
         self.libros = []
@@ -605,10 +832,14 @@ class Ventana(QMainWindow):
                           "Libros escaneados → PDF/A con OCR, marca de agua y metadatos")
 
         self.col = self._pestana("PROCESAR")
-        self._seccion_configuracion()
         self._seccion_libros()
         self._seccion_proceso()
         self._seccion_resultados()
+        self.col.addStretch()
+
+        self.col = self._pestana("METADATOS")
+        self.meta = PanelMetadatos(self, "METADATOS", "CSV de metadatos", "csv", "meta_config")
+        self.meta.cambiado.connect(lambda: self._mostrar_libros(self.libros))
         self.col.addStretch()
 
         self.col = self._pestana("MARCAS DE AGUA")
@@ -824,25 +1055,6 @@ class Ventana(QMainWindow):
         boton = QPushButton("Elegir…")
         lay.addWidget(boton)
         return caja, img, nombre, detalle, boton
-
-    def _seccion_configuracion(self):
-        lay, fila = self._card(1, "Configuración")
-
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(12)
-        grid.addWidget(QLabel("CSV de metadatos", objectName="sub"), 0, 0)
-        caja, _, self.csv_nombre, self.csv_detalle, b = self._selector("CSV")
-        b.clicked.connect(self.elegir_csv)
-        self.csv_detalle.linkActivated.connect(
-            lambda _: QMessageBox.information(self, "Avisos del CSV", "\n".join(self.avisos_csv)))
-        grid.addWidget(caja, 1, 0)
-        grid.setColumnStretch(0, 1)
-        grid.setColumnStretch(1, 1)
-        lay.addLayout(grid)
-
-        # Lo que se usará al procesar; se ajusta en la pestaña COMPONENTES
-        self.resumen_rend = QLabel(objectName="sub")
-        lay.addWidget(self.resumen_rend)
 
     def _seccion_componentes(self):
         lay, _ = self._card("COMPONENTES", "Equipo donde se procesa")
@@ -1257,15 +1469,12 @@ class Ventana(QMainWindow):
                       "y pasan a OUTPUT; los demás se quedan y se listan abajo.", objectName="sub")
         nota.setWordWrap(True)
         lay.addWidget(nota)
-
-        grid = QGridLayout()
-        grid.addWidget(QLabel("CSV para inyectar", objectName="sub"), 0, 0)
-        caja, _, self.iny_csv_nombre, self.iny_csv_detalle, b = self._selector("CSV")
-        b.clicked.connect(self.elegir_csv_inyectar)
-        grid.addWidget(caja, 1, 0)
-        grid.setColumnStretch(0, 1)
-        grid.setColumnStretch(1, 1)
-        lay.addLayout(grid)
+        tarjeta_pdf = lay.parentWidget()
+        self.meta_iny = PanelMetadatos(self, "INYECTAR METADATOS", "CSV para inyectar", "csv_inyectar",
+                                       "meta_config_inyectar", cfg_inicial=self.meta.cfg)
+        self.meta_iny.cambiado.connect(self.refrescar_sin_meta)
+        self.col.removeWidget(tarjeta_pdf)  # la lista de PDF va después del CSV y sus campos
+        self.col.addWidget(tarjeta_pdf)
 
         cab = QHBoxLayout()
         self.iny_titulo = QLabel(objectName="sub")
@@ -1312,7 +1521,6 @@ class Ventana(QMainWindow):
         self.iny_log.setMinimumHeight(120)
         lay.addWidget(self.iny_log)
 
-        self.iny_codigos = None
         self.iny_ejecucion = None
         self.iny_resultados_txt = None
 
@@ -1730,28 +1938,8 @@ class Ventana(QMainWindow):
 
     # ── Inyectar metadatos ─────────────────────────────────────────────────
 
-    def elegir_csv_inyectar(self):
-        ruta, _ = QFileDialog.getOpenFileName(
-            self, "CSV para inyectar metadatos",
-            self.ajustes.value("csv_inyectar", self.ajustes.value("csv", str(Path.home()))),
-            "CSV (*.csv);;Todos (*)")
-        if ruta:
-            self.cargar_csv_inyectar(ruta)
-
     def cargar_csv_inyectar(self, ruta):
-        try:
-            codigos, n_codigos, _ = leer_csv(ruta)
-        except OSError as e:
-            QMessageBox.warning(self, "CSV para inyectar", f"No se pudo leer el CSV.\n{e}")
-            return
-        if not codigos:
-            QMessageBox.warning(self, "CSV para inyectar", "El archivo no tiene códigos válidos.")
-            return
-        self.iny_codigos = codigos
-        self.ajustes.setValue("csv_inyectar", ruta)
-        self.iny_csv_nombre.setText(Path(ruta).name)
-        self.iny_csv_detalle.setText(f"{n_codigos:,} códigos".replace(",", "."))
-        self.refrescar_sin_meta()
+        self.meta_iny.cargar(ruta, avisar=False)
 
     def refrescar_sin_meta(self):
         """Lista los PDF de OUTPUT/SIN METADATOS y si están en el CSV elegido."""
@@ -1769,9 +1957,9 @@ class Ventana(QMainWindow):
             peso = QTableWidgetItem(formato_gb(pdf.stat().st_size))
             peso.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             self.iny_tabla.setItem(fila, 1, peso)
-            if self.iny_codigos is None:
+            if self.meta_iny.codigos is None:
                 estado = pill("Elige el CSV", "gris")
-            elif pdf.stem in self.iny_codigos:
+            elif pdf.stem in self.meta_iny.codigos:
                 estado = pill("Está: se inyectará", "ok")
                 estan += 1
             else:
@@ -1784,7 +1972,7 @@ class Ventana(QMainWindow):
             self.iny_tabla.setCellWidget(fila, 2, celda)
         if not pdfs:
             self.iny_titulo.setText(f"No hay PDF en {carpeta}")
-        elif self.iny_codigos is None:
+        elif self.meta_iny.codigos is None:
             self.iny_titulo.setText(f"{len(pdfs)} PDF sin metadatos")
         else:
             self.iny_titulo.setText(f"{len(pdfs)} PDF sin metadatos · {estan} están en el CSV elegido · "
@@ -1799,7 +1987,7 @@ class Ventana(QMainWindow):
         if self.ejecucion:
             self.iny_aviso.setText("Espera a que termine el procesamiento.")
             return
-        if self.iny_codigos is None:
+        if self.meta_iny.codigos is None:
             self.iny_aviso.setText("Falta elegir el CSV para inyectar.")
             return
         self.iny_aviso.setText("")
@@ -1810,7 +1998,7 @@ class Ventana(QMainWindow):
             f"{SIN_META_SUBDIR}.\n¿Continuar?")
         if r != QMessageBox.Yes:
             return
-        args = ["--csv", self.ajustes.value("csv_inyectar"),
+        args = ["--csv", self.meta_iny.ruta, "--meta-config", self.meta_iny.escribir_json(META_JSON_INY),
                 "--output-dir", str(self.carpetas["output"]),
                 "--registro-dir", str(self.carpetas["registro"])]
         self.iny_log.clear()
@@ -1923,7 +2111,10 @@ class Ventana(QMainWindow):
         buf.close()
 
     def _seccion_libros(self):
-        lay, fila = self._card(2, "Libros a procesar")
+        lay, fila = self._card(1, "Libros a procesar")
+        # Lo que se usará al procesar; se ajusta en la pestaña COMPONENTES
+        self.resumen_rend = QLabel(objectName="sub")
+        lay.addWidget(self.resumen_rend)
 
         # Búsqueda: muestra solo los libros cuyo nombre coincide (p. ej. "AHFCPC").
         # Todos / Ninguno actúan sobre los que se ven; "Solo estos" marca los que
@@ -1998,7 +2189,7 @@ class Ventana(QMainWindow):
         lay.addLayout(abajo)
 
     def _seccion_proceso(self):
-        lay, fila = self._card(3, "En proceso")
+        lay, fila = self._card(2, "En proceso")
         self.btn_detener = QPushButton("■  Detener")
         self.btn_detener.setEnabled(False)
         self.btn_detener.clicked.connect(self.detener)
@@ -2030,7 +2221,7 @@ class Ventana(QMainWindow):
         lay.addWidget(self.log)
 
     def _seccion_resultados(self):
-        lay, fila = self._card(4, "Resultados de esta ejecución")
+        lay, fila = self._card(3, "Resultados de esta ejecución")
         for texto, clave in [("Abrir OUTPUT", "output"), ("Abrir REVIEW", "review")]:
             b = QPushButton(texto)
             b.clicked.connect(lambda _=False, c=clave: self.abrir(self.carpetas[c]))
@@ -2226,38 +2417,8 @@ class Ventana(QMainWindow):
                 f"de OCR y {libros} libro(s) en paralelo.")
             self.btn_recomendado.setEnabled(True)
 
-    def elegir_csv(self):
-        ruta, _ = QFileDialog.getOpenFileName(self, "CSV de metadatos", self.ajustes.value("csv", str(Path.home())),
-                                              "CSV (*.csv);;Todos (*)")
-        if ruta:
-            self.cargar_csv(ruta)
-
     def cargar_csv(self, ruta):
-        try:
-            codigos, n_codigos, avisos = leer_csv(ruta)
-        except OSError as e:
-            QMessageBox.warning(self, "CSV de metadatos", f"No se pudo leer el CSV.\n{e}")
-            return
-        if not codigos:
-            QMessageBox.warning(self, "CSV de metadatos", "El archivo no tiene códigos válidos.")
-            return
-        self.codigos_csv = codigos
-        self.ajustes.setValue("csv", ruta)
-        self.csv_nombre.setText(Path(ruta).name)
-        self.avisos_csv = avisos
-        self.n_codigos = n_codigos
-        self._pintar_detalle_csv()
-        self._mostrar_libros(self.libros)
-
-    def _pintar_detalle_csv(self):
-        # El enlace va en HTML, así que su color se pone a mano según el tema
-        if self.codigos_csv is None:
-            return
-        detalle = f"{self.n_codigos:,} códigos".replace(",", ".")
-        if self.avisos_csv:
-            color = TEMAS[self.tema]["warn"][1]
-            detalle += f' · <a href="#" style="color:{color};">{len(self.avisos_csv)} aviso(s)</a>'
-        self.csv_detalle.setText(detalle)
+        self.meta.cargar(ruta, avisar=False)
 
     # ── Tema claro / oscuro ────────────────────────────────────────────────
 
@@ -2270,7 +2431,9 @@ class Ventana(QMainWindow):
         for b, _, _ in getattr(self, "botones_nav", []):
             b.setIcon(icono_nav(b.property("icono"), nombre))
         self.btn_tema.setText("☀  Modo claro" if nombre == "oscuro" else "☾  Modo oscuro")
-        self._pintar_detalle_csv()
+        for panel in (getattr(self, "meta", None), getattr(self, "meta_iny", None)):
+            if panel:
+                panel.pintar_detalle()
 
     def cambiar_tema(self):
         self.aplicar_tema("claro" if self.tema == "oscuro" else "oscuro")
@@ -2334,9 +2497,9 @@ class Ventana(QMainWindow):
                 estado = pill("Ya está en OUTPUT", "gris")
             elif libro["paginas"] == 0:
                 estado = pill("Sin TIFF", "error")
-            elif self.codigos_csv is None:
+            elif self.meta.codigos is None:
                 estado = pill("Elige el CSV", "gris")
-            elif nombre in self.codigos_csv:
+            elif nombre in self.meta.codigos:
                 estado = pill("En CSV", "ok")
             else:
                 estado = pill("Sin metadatos", "warn")
@@ -2410,8 +2573,8 @@ class Ventana(QMainWindow):
     def iniciar(self):
         seleccion = self._seleccionados()
         faltan = []
-        if self.codigos_csv is None:
-            faltan.append("el CSV de metadatos")
+        if self.meta.codigos is None:
+            faltan.append("el CSV de metadatos (pestaña METADATOS)")
         if self.marca_activa["logo"].isChecked() and not self.logo_ruta:
             faltan.append("el logo (pestaña MARCAS DE AGUA), o desmarcar Logo")
         if not seleccion:
@@ -2448,7 +2611,7 @@ class Ventana(QMainWindow):
             args += ["--marca-diagonal", MARCA_DIAGONAL]
         MARCA_JSON.parent.mkdir(parents=True, exist_ok=True)
         MARCA_JSON.write_text(json.dumps(self._config_marca(), indent=2), encoding="utf-8")
-        args += ["--marca-config", str(MARCA_JSON)]
+        args += ["--marca-config", str(MARCA_JSON), "--meta-config", self.meta.escribir_json(META_JSON)]
         for clave, _, opcion, *_ in [*CARPETAS, *CARPETAS_INTERNAS]:
             args += [opcion, str(self.carpetas[clave])]
         for libro in seleccion:
@@ -2483,6 +2646,7 @@ class Ventana(QMainWindow):
         for w in (self.tabla, self.ocr_slider, self.jobs, self.png, self.ram, self.hilos,
                   self.gpu, self.btn_recomendado, self.btn_carpetas_def, *self.botones_carpeta,
                   self.texto_marca, *self.marca_activa.values(), self.btn_logo, self.btn_marca_def,
+                  *self.meta.widgets,
                   *(w for c in self.marca_ctrl.values() for w in c.values())):
             w.setEnabled(not si)
         self._activar_png()

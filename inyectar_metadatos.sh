@@ -14,6 +14,7 @@
 #   bash inyectar_metadatos.sh --csv metadatos.csv
 #   bash inyectar_metadatos.sh --csv metadatos.csv --book AR10611 --book XTEST01
 #   bash inyectar_metadatos.sh --csv m.csv --output-dir /datos/OUT --registro-dir /datos/REGISTRO
+#   bash inyectar_metadatos.sh --csv m.csv --meta-config meta.json   # columnas → campos
 #
 # SALIDA: logs/inyeccion_<ts>.txt con una línea ESTADO|libro|motivo por PDF
 #         (OK, FALTA = no está en el CSV, ERROR)
@@ -47,6 +48,7 @@ while [[ $# -gt 0 ]]; do
         --output-dir)   OUTPUT_DIR="$2"; shift 2 ;;
         --registro-dir) REGISTRO_DIR="$2"; shift 2 ;;
         --book)         SOLO+=("$2"); shift 2 ;;
+        --meta-config)  META_CONFIG="$2"; shift 2 ;;
         -h|--help)      usage; exit 0 ;;
         *) _log ERROR "Argumento desconocido: $1"; exit 1 ;;
     esac
@@ -65,7 +67,7 @@ INDICE="$(mktemp)"
 trap 'rm -f "$INDICE"' EXIT
 meta_indice "$CSV_META" > "$INDICE"
 [[ -s "$INDICE" ]] || { _log ERROR "El CSV no tiene códigos válidos: $CSV_META"; exit 1; }
-_log INFO "CSV: $(basename "$CSV_META") ($(cut -d'|' -f1 "$INDICE" | sort -u | wc -l) códigos)"
+_log INFO "CSV: $(basename "$CSV_META") ($(cut -d"$META_SEP" -f1 "$INDICE" | sort -u | wc -l) códigos)"
 _log INFO "PDF sin metadatos: $SIN_META_DIR"
 _log INFO "Resultados de esta ejecución: $RESULTADOS"
 : > "$RESULTADOS"

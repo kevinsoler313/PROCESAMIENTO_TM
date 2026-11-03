@@ -80,6 +80,12 @@ una barra lateral:
     3. En proceso: avance por libro, CPU, RAM, disco y log en vivo. "Detener"
        equivale a Ctrl+C.
     4. Resultados: exitosos, sin metadatos, en REVIEW y por reintentar.
+  - **METADATOS:** muestra las columnas del CSV elegido y sus primeras filas.
+    Se indica si la primera fila es encabezado y qué columna es el código del
+    libro. Cada campo del PDF (Título, Asunto, Autor, Palabras clave, Creador,
+    Productor y Descripción) es texto libre con columnas `{N}`; «+ Columna» las
+    inserta, y debajo se ve el resultado con la primera fila. Vale también para
+    Inyectar metadatos.
   - **MARCAS DE AGUA:** logo, texto al pie y marca diagonal
     («CÁMARA DE REPRESENTANTES»). Los tres son opcionales, cada uno con su
     casilla, y tienen posición, transparencia y tamaño propios. La vista previa
@@ -251,6 +257,21 @@ bash inyectar_metadatos.sh --csv otro.csv --book AR10611       # solo ese libro
 
 `metadatos.sh` reúne la lectura del CSV y la escritura de metadatos; lo usan
 `main.sh` e `inyectar_metadatos.sh`, así que ambos escriben los mismos campos.
+Qué columna va en cada campo lo decide `metadatos.py`, con el JSON de
+`--meta-config` (formato en su cabecera). Sin él se escribe lo de siempre:
+
+| Campo | Plantilla predeterminada |
+|---|---|
+| Title | `{1}` |
+| Subject | `Congreso de la República - {3}` |
+| Author | `Congreso de la República` |
+| Keywords | `Fondo: {2}, Subfondo: {3}, Código: {1}, Resolución: {5}, Equipo: {4}` |
+| Creator | `{4}` |
+| Producer | `Sistema de Digitalización - Congreso de la República` |
+| Description | `Documento digitalizado - Código: {1}` |
+
+Un campo con la plantilla vacía no se escribe y conserva lo que ya traiga el
+PDF; por ejemplo, el Productor que pone ocrmypdf.
 
 Al final se muestra un resumen: exitosos, sin metadatos, en REVIEW, por
 reintentar y omitidos. El detalle queda en `logs/`.
