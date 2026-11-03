@@ -79,7 +79,11 @@ una barra lateral:
   que estén, los pasa a OUTPUT y actualiza el registro a `OK`; avisa cuáles
   siguen sin aparecer. Usa las carpetas de Procesamiento › CARPETAS DE TRABAJO.
 - **Crear contenedores GDOC:** genera el CSV para importar contenedores en GDOC
-  (ver abajo). Se elige la entrega (ENTREGA 1 a 30) y los libros de OUTPUT.
+  (ver abajo). Se eligen la carpeta de PDF (por defecto OUTPUT), la entrega
+  (ENTREGA 1 a 30) y los libros.
+- **Crear registro OCR-ICR:** genera el CSV de registro de una entrega (ver
+  abajo). Se eligen la carpeta de PDF, la carpeta de TIFF, la entrega y los
+  libros.
 - **Configuración** (al pie de la barra): la sede donde se usa el equipo
   (AGN, BIBLIOTECA, FUNZA o SANTA CLARA) y la versión del programa, con el
   botón **Buscar actualización** (ver abajo).
@@ -134,7 +138,7 @@ git tag v1.1.0 && git push origin main --tags
 ## Contenedores GDOC
 
 `contenedores_gdoc.py` crea un CSV con los encabezados de la plantilla
-`layout_importar_contenedores.xls` y una fila por cada PDF de OUTPUT (los de
+`layout_importar_contenedores.xls` y una fila por cada PDF de la carpeta elegida, por defecto OUTPUT (los de
 `SIN METADATOS` no entran):
 
 | Columna | Valor |
@@ -149,6 +153,29 @@ git tag v1.1.0 && git push origin main --tags
 
 ```bash
 python3 contenedores_gdoc.py --output-dir /mnt/datos/OUTPUT --entrega 10 --sede FUNZA --salida contenedores.csv
+```
+
+## Registro OCR-ICR
+
+`registro_ocr_icr.py` crea un CSV con las columnas de la hoja de la sede y una
+fila por cada PDF de la carpeta de PDF (solo la raíz).
+
+| Columna | Valor |
+|---|---|
+| CODIFICACION | Código del libro |
+| LIBRO | Parte numérica final del código, con sus ceros (`AHFDAP001` → `001`) |
+| # IMAGENES | TIFF en la carpeta del libro (`<código>` o `<código> OK`) |
+| PESO DE PDF | MB, con coma decimal |
+| PESO DE CARPETA TIFF | GB, con coma decimal |
+| FECHA | Día en que se genera (d/m/aaaa) |
+| ENTREGA | `ENTREGA 06` |
+| HASH | SHA-256 del PDF |
+
+La interfaz avisa de los libros sin carpeta de TIFF y de los que tienen más o
+menos páginas en el PDF que imágenes TIFF.
+
+```bash
+python3 registro_ocr_icr.py --pdf-dir /mnt/datos/OUTPUT --tiff-dir /datos/TIFF --entrega 6 --salida registro.csv
 ```
 
 ## Marca de agua

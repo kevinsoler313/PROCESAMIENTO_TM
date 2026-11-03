@@ -50,6 +50,7 @@ MARCA_JSON = SCRIPT_DIR / "logs" / "marca_interfaz.json"   # lo que se pasa a ma
 sys.path.insert(0, str(SCRIPT_DIR))
 import marca_agua as MA  # noqa: E402
 import contenedores_gdoc as CG  # noqa: E402
+import registro_ocr_icr as RO  # noqa: E402
 import actualizacion as ACT  # noqa: E402
 
 VERSION = ACT.version_local()
@@ -402,6 +403,7 @@ ICONOS_NAV = {
     "procesar": '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/><path d="M3 13h18"/>',
     "metadatos": '<path d="M3 12V4h8l10 10-8 8z"/><circle cx="7.5" cy="7.5" r="1.4"/>',
     "contenedor": '<path d="M3 4h18v4H3z"/><path d="M5 8h14v12H5z"/><path d="M10 12h4"/>',
+    "registro": '<path d="M5 3h14v18H5z"/><path d="M9 8h6M9 12h6M9 16h3"/>',
     "configuracion": '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3'
                      'M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"/>',
 }
@@ -552,6 +554,7 @@ class Escaner(QObject):
 class Ventana(QMainWindow):
     paginas_listas = Signal(int, int, int)    # turno, fila, páginas (-1 = no se pudo leer)
     actualizacion_lista = Signal(str, object)  # paso ('buscar' | 'instalar'), resultado o ErrorActualizacion
+    ocricr_evento = Signal(str, int, object)   # 'fila' | 'hash' | 'fin', turno o avance, datos
 
     def __init__(self):
         super().__init__()
@@ -624,8 +627,14 @@ class Ventana(QMainWindow):
 
         # ── Sección CREAR CONTENEDORES GDOC ──
         self.col = self._pagina("CREAR CONTENEDORES GDOC", "contenedor",
-                                "CSV para importar en GDOC los libros terminados en OUTPUT")
+                                "CSV para importar en GDOC los libros terminados")
         self._seccion_gdoc()
+        self.col.addStretch()
+
+        # ── Sección CREAR REGISTRO OCR-ICR ──
+        self.col = self._pagina("CREAR REGISTRO OCR-ICR", "registro",
+                                "CSV de registro de una entrega: imágenes, pesos y SHA-256 de cada libro")
+        self._seccion_ocricr()
         self.col.addStretch()
 
         # ── Sección CONFIGURACIÓN: al pie de la barra, aparte de las de trabajo ──
@@ -643,6 +652,7 @@ class Ventana(QMainWindow):
         self.nav_lay.addWidget(self.nav_pie)
         self._pintar_sede()
         self.paginas_listas.connect(self._gdoc_pagina_lista)
+        self.ocricr_evento.connect(self._ocricr_evento)
         self.actualizacion_lista.connect(self._actualizacion_lista)
         for combo in self.findChildren(QComboBox):
             combo.activated.connect(combo.hidePopup)
@@ -691,7 +701,7 @@ class Ventana(QMainWindow):
 
     def _seccion_nav(self, nombre, widget, icono, descripcion):
         indice = self.secciones.addWidget(widget)
-        titulo = nombre.capitalize().replace("gdoc", "GDOC")
+        titulo = nombre.capitalize().replace("gdoc", "GDOC").replace("ocr-icr", "OCR-ICR")
         b = QPushButton(f"  {titulo}", objectName="navBoton")
         b.setIcon(icono_nav(icono, self.tema))
         b.setProperty("icono", icono)
@@ -1059,14 +1069,25 @@ class Ventana(QMainWindow):
         os.execv(sys.executable, [sys.executable, str(Path(__file__).resolve())])
 
     def _seccion_gdoc(self):
-        """CSV con la plantilla layout_importar_contenedores: una fila por PDF de OUTPUT."""
+        """CSV con la plantilla layout_importar_contenedores: una fila por PDF de la carpeta elegida."""
         lay, _ = self._card("CREAR CONTENEDORES GDOC", "Configuración previa")
-        nota = QLabel("Se genera un CSV con una fila por cada PDF terminado en OUTPUT (los de "
-                      f"OUTPUT/{SIN_META_SUBDIR} no se incluyen). Columnas fijas: resguardo ARCHIVO, "
-                      "estatus DENTRO, nivel1 CONSORCIO D3LF1N y nivel2 CAMARA DE REPRESENTANTES.",
-                      objectName="sub")
+        nota = QLabel("Se genera un CSV con una fila por cada PDF de la carpeta de PDF (solo los que están "
+                      "directamente en ella; subcarpetas como SIN METADATOS no se incluyen). Columnas fijas: "
+                      "resguardo ARCHIVO, estatus DENTRO, nivel1 CONSORCIO D3LF1N y nivel2 CAMARA DE "
+                      "REPRESENTANTES.", objectName="sub")
         nota.setWordWrap(True)
         lay.addWidget(nota)
+        fila_c = QHBoxLayout()
+        fila_c.setSpacing(12)
+        etiqueta = QLabel("Carpeta de PDF", objectName="subtitulo")
+        etiqueta.setToolTip("Donde están los PDF de los libros terminados")
+        fila_c.addWidget(etiqueta)
+        self.gdoc_campo = QLineEdit(readOnly=True)
+        fila_c.addWidget(self.gdoc_campo, 1)
+        b = QPushButton("Elegir…")
+        b.clicked.connect(self._gdoc_elegir)
+        fila_c.addWidget(b)
+        lay.addLayout(fila_c)
         fila = QHBoxLayout()
         fila.setSpacing(12)
         fila.addWidget(QLabel("Entrega (nivel3)", objectName="subtitulo"))
@@ -1086,7 +1107,7 @@ class Ventana(QMainWindow):
         fila.addStretch()
         lay.addLayout(fila)
 
-        lay, fila = self._card("CREAR CONTENEDORES GDOC", "Libros en OUTPUT")
+        lay, fila = self._card("CREAR CONTENEDORES GDOC", "Libros")
         cab = QHBoxLayout()
         self.gdoc_buscar = QLineEdit()
         self.gdoc_buscar.setPlaceholderText("Buscar libro, p. ej. AHFCPC")
@@ -1135,6 +1156,93 @@ class Ventana(QMainWindow):
 
         self.gdoc_libros = []          # [(código, ruta, páginas o None)]
         self._pintar_gdoc_config()
+
+    def _seccion_ocricr(self):
+        """CSV de registro OCR-ICR: una fila por PDF, con los datos de su carpeta de TIFF."""
+        lay, _ = self._card("CREAR REGISTRO OCR-ICR", "Configuración previa")
+        nota = QLabel("Se genera un CSV con una fila por cada PDF de la carpeta de PDF. De la carpeta de "
+                      "TIFF del libro (con su mismo código) se toman el número de imágenes y el peso. "
+                      "PESO DE PDF va en MB y PESO DE CARPETA TIFF en GB; FECHA es la de hoy.",
+                      objectName="sub")
+        nota.setWordWrap(True)
+        lay.addWidget(nota)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(12)
+        self.ocricr_campo = {}
+        for i, (clave, nombre, ayuda) in enumerate((
+                ("pdf", "Carpeta de PDF", "Donde están los PDF de los libros ya procesados"),
+                ("tiff", "Carpeta de TIFF", "Donde está una carpeta de TIFF por libro"))):
+            etiqueta = QLabel(nombre, objectName="subtitulo")
+            etiqueta.setToolTip(ayuda)
+            grid.addWidget(etiqueta, i, 0)
+            campo = QLineEdit(readOnly=True)
+            campo.setToolTip(ayuda)
+            grid.addWidget(campo, i, 1)
+            b = QPushButton("Elegir…")
+            b.clicked.connect(lambda _=False, c=clave, n=nombre: self._ocricr_elegir(c, n))
+            grid.addWidget(b, i, 2)
+            self.ocricr_campo[clave] = campo
+        grid.addWidget(QLabel("Entrega", objectName="subtitulo"), 2, 0)
+        self.ocricr_entrega = QComboBox()
+        for n in RO.ENTREGAS:
+            self.ocricr_entrega.addItem(f"ENTREGA {n:02d}", n)
+        self.ocricr_entrega.setMinimumWidth(170)
+        guardada = self.ocricr_entrega.findData(int(self.ajustes.value("ocricr_entrega", 1)))
+        self.ocricr_entrega.setCurrentIndex(max(guardada, 0))
+        self.ocricr_entrega.currentIndexChanged.connect(
+            lambda _: self.ajustes.setValue("ocricr_entrega", self.ocricr_entrega.currentData()))
+        grid.addWidget(self.ocricr_entrega, 2, 1, Qt.AlignLeft)
+        grid.setColumnStretch(1, 1)
+        lay.addLayout(grid)
+
+        lay, _ = self._card("CREAR REGISTRO OCR-ICR", "Libros")
+        cab = QHBoxLayout()
+        self.ocricr_buscar = QLineEdit()
+        self.ocricr_buscar.setPlaceholderText("Buscar libro, p. ej. AHFCPC")
+        self.ocricr_buscar.setClearButtonEnabled(True)
+        self.ocricr_buscar.textChanged.connect(self._ocricr_filtrar)
+        cab.addWidget(self.ocricr_buscar, 1)
+        for texto, accion in (("Todos", lambda: self._ocricr_marcar(True)),
+                              ("Ninguno", lambda: self._ocricr_marcar(False)),
+                              ("Actualizar", self.refrescar_ocricr)):
+            b = QPushButton(texto)
+            b.clicked.connect(accion)
+            cab.addWidget(b)
+        lay.addLayout(cab)
+        self.ocricr_titulo = QLabel(objectName="sub")
+        lay.addWidget(self.ocricr_titulo)
+
+        self.ocricr_tabla = QTableWidget(0, 7)
+        self.ocricr_tabla.setHorizontalHeaderLabels(
+            ["", "Código", "Páginas PDF", "Imágenes TIFF", "Peso PDF (MB)", "Peso TIFF (GB)", "Estado"])
+        self.ocricr_tabla.verticalHeader().setVisible(False)
+        self.ocricr_tabla.setSelectionMode(QTableWidget.NoSelection)
+        self.ocricr_tabla.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.ocricr_tabla.setFocusPolicy(Qt.NoFocus)
+        self.ocricr_tabla.setAlternatingRowColors(True)
+        h = self.ocricr_tabla.horizontalHeader()
+        for col in range(7):
+            h.setSectionResizeMode(col, QHeaderView.Stretch if col in (1, 6) else QHeaderView.ResizeToContents)
+        self.ocricr_tabla.verticalHeader().setDefaultSectionSize(34)
+        self.ocricr_tabla.setMinimumHeight(240)
+        self.ocricr_tabla.itemChanged.connect(self._ocricr_titulo)
+        lay.addWidget(self.ocricr_tabla)
+
+        abajo = QHBoxLayout()
+        self.ocricr_aviso = QLabel(objectName="aviso")
+        self.ocricr_aviso.setWordWrap(True)
+        abajo.addWidget(self.ocricr_aviso, 1)
+        self.btn_ocricr = QPushButton("Generar CSV", objectName="primario")
+        self.btn_ocricr.clicked.connect(self.generar_ocricr)
+        abajo.addWidget(self.btn_ocricr)
+        lay.addLayout(abajo)
+        self.ocricr_resultado = QLabel()
+        self.ocricr_resultado.setWordWrap(True)
+        self.ocricr_resultado.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        lay.addWidget(self.ocricr_resultado)
+
+        self.ocricr_libros = []        # [{codigo, pdf, paginas, imagenes, bytes_tiff, leido}]
+        self.ocricr_contador = 0
 
     def _seccion_metadatos(self):
         """PDF que quedaron sin metadatos (OUTPUT/SIN METADATOS) + un CSV, que puede
@@ -1319,9 +1427,19 @@ class Ventana(QMainWindow):
         self.gdoc_sede.style().unpolish(self.gdoc_sede)
         self.gdoc_sede.style().polish(self.gdoc_sede)
 
+    def _gdoc_carpeta(self):
+        return Path(self.ajustes.value("gdoc_pdf", "") or self.carpetas["output"])
+
+    def _gdoc_elegir(self):
+        ruta = QFileDialog.getExistingDirectory(self, "Carpeta de PDF", str(self._gdoc_carpeta()))
+        if ruta:
+            self.ajustes.setValue("gdoc_pdf", ruta)
+            self.refrescar_gdoc()
+
     def refrescar_gdoc(self):
-        """Lista los PDF de OUTPUT; las páginas se leen aparte para no congelar la ventana."""
-        pdfs = CG.libros_output(self.carpetas["output"])
+        """Lista los PDF de la carpeta elegida; las páginas se leen aparte para no congelar la ventana."""
+        self.gdoc_campo.setText(str(self._gdoc_carpeta()))
+        pdfs = CG.libros_output(self._gdoc_carpeta())
         self.gdoc_libros = [[p.stem, p, None] for p in pdfs]
         self.gdoc_tabla.blockSignals(True)
         self.gdoc_tabla.setRowCount(0)
@@ -1382,7 +1500,7 @@ class Ventana(QMainWindow):
     def _gdoc_titulo(self, *_):
         total = self.gdoc_tabla.rowCount()
         if not total:
-            self.gdoc_titulo.setText(f"No hay PDF en {self.carpetas['output']}")
+            self.gdoc_titulo.setText(f"No hay PDF en {self._gdoc_carpeta()}")
             return
         pendientes = sum(1 for _, _, n in self.gdoc_libros if n is None)
         texto = f"{len(self._gdoc_seleccion())} de {total} libros marcados"
@@ -1421,6 +1539,184 @@ class Ventana(QMainWindow):
         paginas_txt = f"{paginas:,}".replace(",", ".")
         self.gdoc_resultado.setText(f"✓ {len(filas)} libro(s), {paginas_txt} páginas · ENTREGA {entrega} · "
                                     f"sede {sede}\n{destino}")
+
+    # ── Crear registro OCR-ICR ─────────────────────────────────────────────
+
+    def _ocricr_carpeta(self, clave):
+        por_defecto = self.carpetas["output" if clave == "pdf" else "input"]
+        return Path(self.ajustes.value(f"ocricr_{clave}", "") or por_defecto)
+
+    def _ocricr_elegir(self, clave, nombre):
+        ruta = QFileDialog.getExistingDirectory(self, nombre, str(self._ocricr_carpeta(clave)))
+        if ruta:
+            self.ajustes.setValue(f"ocricr_{clave}", ruta)
+            self.refrescar_ocricr()
+
+    def refrescar_ocricr(self):
+        """Lista los PDF; páginas y TIFF se leen aparte para no congelar la ventana."""
+        if not hasattr(self, "ocricr_tabla"):
+            return
+        for clave, campo in self.ocricr_campo.items():
+            campo.setText(str(self._ocricr_carpeta(clave)))
+        pdfs = RO.libros_pdf(self._ocricr_carpeta("pdf"))
+        self.ocricr_libros = [{"codigo": p.stem, "pdf": p, "paginas": None, "imagenes": None,
+                               "bytes_tiff": None, "leido": False} for p in pdfs]
+        self.ocricr_tabla.blockSignals(True)
+        self.ocricr_tabla.setRowCount(0)
+        for libro in self.ocricr_libros:
+            fila = self.ocricr_tabla.rowCount()
+            self.ocricr_tabla.insertRow(fila)
+            chk = QTableWidgetItem()
+            chk.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)
+            chk.setCheckState(Qt.Checked)
+            self.ocricr_tabla.setItem(fila, 0, chk)
+            self.ocricr_tabla.setItem(fila, 1, QTableWidgetItem(libro["codigo"]))
+            textos = ["…", "…", RO.decimal_coma(libro["pdf"].stat().st_size / 1024 ** 2), "…", "leyendo…"]
+            for col, texto in enumerate(textos, 2):
+                item = QTableWidgetItem(texto)
+                if col < 6:
+                    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                self.ocricr_tabla.setItem(fila, col, item)
+        self.ocricr_tabla.blockSignals(False)
+        self._ocricr_filtrar()
+        self.ocricr_contador += 1
+        tiff_dir = self._ocricr_carpeta("tiff")
+        threading.Thread(target=self._ocricr_leer, args=(self.ocricr_contador, tiff_dir), daemon=True).start()
+
+    def _ocricr_leer(self, turno, tiff_dir):
+        for i, libro in enumerate(list(self.ocricr_libros)):
+            if turno != self.ocricr_contador:      # se pidió otra lista: abandonar
+                return
+            datos = {"fila": i, "paginas": CG.paginas_pdf(libro["pdf"]), "imagenes": None, "bytes_tiff": None}
+            try:
+                carpeta = RO.carpeta_tiff(tiff_dir, libro["codigo"])
+                if carpeta:
+                    datos["imagenes"], datos["bytes_tiff"] = RO.datos_tiff(carpeta)
+            except OSError:
+                pass
+            self.ocricr_evento.emit("fila", turno, datos)
+
+    def _ocricr_estado(self, libro):
+        if libro["imagenes"] is None:
+            return "Sin carpeta de TIFF", "error"
+        if libro["paginas"] is None:
+            return "No se pudo leer el PDF", "error"
+        if libro["paginas"] != libro["imagenes"]:
+            return "Páginas ≠ imágenes", "warn"
+        return "✓ Listo", "ok"
+
+    def _ocricr_evento(self, tipo, n, datos):
+        if tipo == "fila":
+            if n != self.ocricr_contador or datos["fila"] >= len(self.ocricr_libros):
+                return
+            i = datos["fila"]
+            libro = self.ocricr_libros[i]
+            libro.update(paginas=datos["paginas"], imagenes=datos["imagenes"],
+                         bytes_tiff=datos["bytes_tiff"], leido=True)
+            texto, tipo_estado = self._ocricr_estado(libro)
+            self.ocricr_tabla.blockSignals(True)
+            self.ocricr_tabla.item(i, 2).setText("—" if libro["paginas"] is None else str(libro["paginas"]))
+            self.ocricr_tabla.item(i, 3).setText("—" if libro["imagenes"] is None else str(libro["imagenes"]))
+            self.ocricr_tabla.item(i, 5).setText(
+                "—" if libro["bytes_tiff"] is None else RO.decimal_coma(libro["bytes_tiff"] / 1024 ** 3))
+            estado = self.ocricr_tabla.item(i, 6)
+            estado.setText(texto)
+            estado.setForeground(QColor(TEMAS[self.tema][tipo_estado][1]))
+            self.ocricr_tabla.blockSignals(False)
+            self._ocricr_titulo()
+        elif tipo == "hash":
+            self.ocricr_resultado.setText(f"Calculando SHA-256… {n} de {datos} libros")
+        elif tipo == "fin":
+            self._ocricr_fin(datos)
+
+    def _ocricr_filtrar(self, *_):
+        texto = self.ocricr_buscar.text().strip().upper()
+        for fila in range(self.ocricr_tabla.rowCount()):
+            codigo = self.ocricr_tabla.item(fila, 1).text().upper()
+            self.ocricr_tabla.setRowHidden(fila, bool(texto) and texto not in codigo)
+        self._ocricr_titulo()
+
+    def _ocricr_marcar(self, marcar):
+        self.ocricr_tabla.blockSignals(True)
+        for fila in range(self.ocricr_tabla.rowCount()):
+            if not self.ocricr_tabla.isRowHidden(fila):
+                self.ocricr_tabla.item(fila, 0).setCheckState(Qt.Checked if marcar else Qt.Unchecked)
+        self.ocricr_tabla.blockSignals(False)
+        self._ocricr_titulo()
+
+    def _ocricr_seleccion(self):
+        return [i for i in range(self.ocricr_tabla.rowCount())
+                if self.ocricr_tabla.item(i, 0).checkState() == Qt.Checked]
+
+    def _ocricr_titulo(self, *_):
+        total = self.ocricr_tabla.rowCount()
+        if not total:
+            self.ocricr_titulo.setText(f"No hay PDF en {self._ocricr_carpeta('pdf')}")
+            return
+        leidos = sum(1 for x in self.ocricr_libros if x["leido"])
+        texto = f"{len(self._ocricr_seleccion())} de {total} libros marcados"
+        if leidos < total:
+            texto += f" · leyendo páginas y TIFF ({leidos}/{total})"
+        self.ocricr_titulo.setText(texto)
+
+    def generar_ocricr(self):
+        seleccion = self._ocricr_seleccion()
+        if not seleccion:
+            self.ocricr_aviso.setText("Marca al menos un libro.")
+            return
+        libros = [self.ocricr_libros[i] for i in seleccion]
+        if not all(x["leido"] for x in libros):
+            self.ocricr_aviso.setText("Aún se están leyendo las páginas y los TIFF. Espera un momento.")
+            return
+        sin_tiff = [x["codigo"] for x in libros if x["imagenes"] is None]
+        if sin_tiff:
+            self.ocricr_aviso.setText("Sin carpeta de TIFF (desmárcalos o revisa la carpeta): "
+                                      + ", ".join(sin_tiff[:5]) + (" …" if len(sin_tiff) > 5 else ""))
+            return
+        distintos = [x["codigo"] for x in libros if x["paginas"] != x["imagenes"]]
+        if distintos:
+            r = QMessageBox.question(
+                self, "Generar registro",
+                f"{len(distintos)} libro(s) tienen distinto número de páginas en el PDF que de imágenes "
+                "TIFF:\n" + ", ".join(distintos[:10]) + (" …" if len(distintos) > 10 else "")
+                + "\n\n¿Generar el CSV de todos modos?")
+            if r != QMessageBox.Yes:
+                return
+        self.ocricr_aviso.setText("")
+        entrega = self.ocricr_entrega.currentData()
+        sede = (self.ajustes.value("sede", "") or "").replace(" ", "_")
+        nombre = f"registro_OCR-ICR_ENTREGA_{entrega:02d}" + (f"_{sede}" if sede else "") + ".csv"
+        sugerido = Path(self.carpetas["registro"]) / nombre
+        destino, _ = QFileDialog.getSaveFileName(self, "Guardar registro OCR-ICR", str(sugerido), "CSV (*.csv)")
+        if not destino:
+            return
+        self.btn_ocricr.setEnabled(False)
+        self.ocricr_resultado.setText(f"Calculando SHA-256… 0 de {len(libros)} libros")
+        threading.Thread(target=self._ocricr_escribir, args=(libros, entrega, destino), daemon=True).start()
+
+    def _ocricr_escribir(self, libros, entrega, destino):
+        try:
+            filas = []
+            for n, x in enumerate(libros, 1):
+                filas.append(RO.fila(x["codigo"], x["imagenes"], x["pdf"].stat().st_size, x["bytes_tiff"],
+                                     entrega, RO.sha256(x["pdf"])))
+                self.ocricr_evento.emit("hash", n, len(libros))
+            Path(destino).parent.mkdir(parents=True, exist_ok=True)
+            RO.escribir_csv(destino, filas)
+            self.ocricr_evento.emit("fin", 0, {"filas": filas, "destino": destino, "entrega": entrega})
+        except OSError as e:
+            self.ocricr_evento.emit("fin", 0, {"error": str(e)})
+
+    def _ocricr_fin(self, datos):
+        self.btn_ocricr.setEnabled(True)
+        if "error" in datos:
+            self.ocricr_resultado.setText("")
+            QMessageBox.warning(self, "Generar registro", f"No se pudo generar el CSV.\n{datos['error']}")
+            return
+        imagenes = sum(f[2] for f in datos["filas"])
+        imagenes_txt = f"{imagenes:,}".replace(",", ".")
+        self.ocricr_resultado.setText(f"✓ {len(datos['filas'])} libro(s), {imagenes_txt} imágenes · "
+                                      f"ENTREGA {datos['entrega']:02d}\n{datos['destino']}")
 
     # ── Inyectar metadatos ─────────────────────────────────────────────────
 
@@ -1745,6 +2041,7 @@ class Ventana(QMainWindow):
     def _restaurar_ajustes(self):
         self._restaurar_carpetas()
         self.refrescar_gdoc()
+        self.refrescar_ocricr()
         csv_iny = self.ajustes.value("csv_inyectar", "")
         if csv_iny and Path(csv_iny).is_file():
             self.cargar_csv_inyectar(csv_iny)
@@ -2168,6 +2465,7 @@ class Ventana(QMainWindow):
         self.ejecucion = None
         self.refrescar_sin_meta()
         self.refrescar_gdoc()
+        self.refrescar_ocricr()
         self._leer_resultados()
         self._limpiar_activos()
         self._en_marcha(False)
