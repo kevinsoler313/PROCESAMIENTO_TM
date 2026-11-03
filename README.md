@@ -81,7 +81,11 @@ una barra lateral:
 - **Crear contenedores GDOC:** genera el CSV para importar contenedores en GDOC
   (ver abajo). Se elige la entrega (ENTREGA 1 a 30) y los libros de OUTPUT.
 - **Configuración** (al pie de la barra): la sede donde se usa el equipo
-  (AGN, BIBLIOTECA, FUNZA o SANTA CLARA).
+  (AGN, BIBLIOTECA, FUNZA o SANTA CLARA) y la versión del programa, con el
+  botón **Buscar actualización** (ver abajo).
+
+La versión se ve en el título de la ventana y al pie de la barra, junto a la
+sede.
 
 Tiene modo oscuro (predeterminado) y claro, con el sistema visual de
 `DESIGN.md` adaptado a los colores de TechnoMart. Cada selección se guarda en
@@ -91,6 +95,41 @@ ajustes, `PROCESAMIENTO_PERFIL=Prueba` usa un perfil aparte.
 Los textos de marca de agua permitidos están en `TEXTOS_MARCA` y
 `MARCA_DIAGONAL`, al inicio de `interfaz/app.py`; no se editan desde la
 interfaz.
+
+## Versiones y actualización
+
+La versión instalada está en `VERSION` (formato `X.Y.Z`). Cada versión
+publicada es una etiqueta `vX.Y.Z` en GitHub.
+
+**Buscar actualización** (Configuración) consulta las etiquetas de GitHub. Si
+hay una más nueva, el botón **Actualizar** hace lo siguiente:
+
+1. Comprueba que no haya un procesamiento en curso ni archivos del programa
+   modificados a mano.
+2. Avanza el código hasta esa etiqueta, solo si es un avance directo
+   (fast-forward).
+3. Corre `instalar_interfaz.sh` si cambió `requirements.txt` o el instalador.
+4. Reinicia el programa.
+
+No se tocan los ajustes de la interfaz (`~/.config/TechnoMart/`), el CSV, el
+logo, `ocr_env` ni las carpetas de datos, porque no están en el repositorio.
+Se necesita que el equipo se haya instalado con `git clone`.
+
+Desde la terminal:
+
+```bash
+python3 actualizacion.py              # informa si hay versión nueva
+python3 actualizacion.py --instalar   # la instala
+```
+
+**Para publicar una versión** (en el equipo de desarrollo):
+
+1. Cambia `VERSION`.
+2. Haz commit y luego:
+
+```bash
+git tag v1.1.0 && git push origin main --tags
+```
 
 ## Contenedores GDOC
 

@@ -50,6 +50,10 @@ MARCA_JSON = SCRIPT_DIR / "logs" / "marca_interfaz.json"   # lo que se pasa a ma
 sys.path.insert(0, str(SCRIPT_DIR))
 import marca_agua as MA  # noqa: E402
 import contenedores_gdoc as CG  # noqa: E402
+import actualizacion as ACT  # noqa: E402
+
+VERSION = ACT.version_local()
+TITULO = f"Procesamiento OCR {VERSION}"
 
 PREVIEW_W, PREVIEW_H = 150, 212    # proporción A4
 
@@ -547,10 +551,11 @@ class Escaner(QObject):
 
 class Ventana(QMainWindow):
     paginas_listas = Signal(int, int, int)    # turno, fila, páginas (-1 = no se pudo leer)
+    actualizacion_lista = Signal(str, object)  # paso ('buscar' | 'instalar'), resultado o ErrorActualizacion
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Procesamiento OCR")
+        self.setWindowTitle(TITULO)
         self.setWindowIcon(QIcon(str(ICONO)))
         self.resize(1320, 940)
         self.ajustes = QSettings("TechnoMart", PERFIL)
@@ -629,14 +634,16 @@ class Ventana(QMainWindow):
         separador.setFixedHeight(1)
         self.nav_lay.addWidget(separador)
         self.nav_lay.addSpacing(8)
-        self.col = self._pagina("CONFIGURACIÓN", "configuracion", "Datos de la sede donde se usa el programa")
+        self.col = self._pagina("CONFIGURACIÓN", "configuracion", "Sede del equipo y versión del programa")
         self._seccion_configuracion_general()
+        self._seccion_version()
         self.col.addStretch()
         self.nav_lay.addSpacing(10)
         self.nav_pie = QLabel(objectName="navPie")
         self.nav_lay.addWidget(self.nav_pie)
         self._pintar_sede()
         self.paginas_listas.connect(self._gdoc_pagina_lista)
+        self.actualizacion_lista.connect(self._actualizacion_lista)
         for combo in self.findChildren(QComboBox):
             combo.activated.connect(combo.hidePopup)
         self._ir_a(int(self.ajustes.value("seccion", 0)))
@@ -955,7 +962,101 @@ class Ventana(QMainWindow):
 
     def _pintar_sede(self):
         sede = self.ajustes.value("sede", "") or "sin elegir"
-        self.nav_pie.setText(f"Sede: {sede}\n{os.uname().nodename}")
+        self.nav_pie.setText(f"Sede: {sede}  ·  v{VERSION}\n{os.uname().nodename}")
+
+    # ── Versión y actualización ──
+
+    def _seccion_version(self):
+        lay, _ = self._card("CONFIGURACIÓN", "Versión del programa")
+        nota = QLabel("Busca en GitHub si hay una versión más nueva y la instala. Los ajustes, el CSV, "
+                      "el logo y las carpetas de datos se conservan.", objectName="sub")
+        nota.setWordWrap(True)
+        lay.addWidget(nota)
+        fila = QHBoxLayout()
+        fila.addWidget(QLabel("Instalada", objectName="subtitulo"))
+        fila.addWidget(QLabel(f"v{VERSION}"))
+        fila.addSpacing(16)
+        self.btn_buscar_act = QPushButton("Buscar actualización")
+        self.btn_buscar_act.clicked.connect(self._buscar_actualizacion)
+        fila.addWidget(self.btn_buscar_act)
+        self.btn_instalar_act = QPushButton("Actualizar", objectName="primario")
+        self.btn_instalar_act.clicked.connect(self._instalar_actualizacion)
+        self.btn_instalar_act.hide()
+        fila.addWidget(self.btn_instalar_act)
+        fila.addStretch()
+        lay.addLayout(fila)
+        self.estado_act = QLabel(objectName="sub")
+        self.estado_act.setWordWrap(True)
+        self.estado_act.hide()
+        lay.addWidget(self.estado_act)
+        self.version_nueva = None
+
+    def _estado_actualizacion(self, texto, tipo="sub"):
+        self.estado_act.setText(texto)
+        self.estado_act.setObjectName(tipo)
+        self.estado_act.style().unpolish(self.estado_act)
+        self.estado_act.style().polish(self.estado_act)
+        self.estado_act.show()
+
+    def _en_segundo_plano(self, paso, funcion):
+        def correr():
+            try:
+                resultado = funcion()
+            except ACT.ErrorActualizacion as e:
+                resultado = e
+            except Exception as e:  # cualquier otro fallo se muestra, no tumba la ventana
+                resultado = ACT.ErrorActualizacion(str(e))
+            self.actualizacion_lista.emit(paso, resultado)
+        threading.Thread(target=correr, daemon=True).start()
+
+    def _buscar_actualizacion(self):
+        self.btn_buscar_act.setEnabled(False)
+        self.btn_instalar_act.hide()
+        self._estado_actualizacion("Buscando en GitHub…")
+        self._en_segundo_plano("buscar", ACT.buscar)
+
+    def _instalar_actualizacion(self):
+        if self.ejecucion or getattr(self, "iny_ejecucion", None):
+            self._estado_actualizacion("Hay un procesamiento en curso. Espera a que termine para actualizar.",
+                                       "aviso")
+            return
+        r = QMessageBox.question(
+            self, "Actualizar",
+            f"Se instalará la versión {self.version_nueva} y el programa se reiniciará.\n"
+            "Los ajustes, el CSV, el logo y los datos se conservan.\n¿Continuar?")
+        if r != QMessageBox.Yes:
+            return
+        self.btn_buscar_act.setEnabled(False)
+        self.btn_instalar_act.setEnabled(False)
+        self._estado_actualizacion(f"Instalando la versión {self.version_nueva}…")
+        version = self.version_nueva
+        self._en_segundo_plano("instalar", lambda: ACT.instalar(version, registro=lambda _: None))
+
+    def _actualizacion_lista(self, paso, resultado):
+        self.btn_buscar_act.setEnabled(True)
+        self.btn_instalar_act.setEnabled(True)
+        if isinstance(resultado, ACT.ErrorActualizacion):
+            self._estado_actualizacion(str(resultado), "aviso")
+            return
+        if paso == "buscar":
+            if resultado["hay_nueva"]:
+                self.version_nueva = resultado["remota"]
+                self.btn_instalar_act.setText(f"Actualizar a v{self.version_nueva}")
+                self.btn_instalar_act.show()
+                self._estado_actualizacion(f"Hay una versión nueva: v{self.version_nueva}.")
+            elif not resultado["remota"]:
+                self._estado_actualizacion("Aún no hay versiones publicadas en GitHub.")
+            else:
+                self._estado_actualizacion(f"✓ Tienes la última versión (v{VERSION}).")
+            return
+        self._estado_actualizacion(f"✓ Actualizado a v{ACT.version_local()}. Reiniciando…")
+        QMessageBox.information(self, "Actualizar",
+                                f"Se instaló la versión {ACT.version_local()}. El programa se reiniciará.")
+        self._reiniciar()
+
+    def _reiniciar(self):
+        self.ajustes.sync()
+        os.execv(sys.executable, [sys.executable, str(Path(__file__).resolve())])
 
     def _seccion_gdoc(self):
         """CSV con la plantilla layout_importar_contenedores: una fila por PDF de OUTPUT."""
@@ -2072,7 +2173,7 @@ class Ventana(QMainWindow):
         self._en_marcha(False)
         self.ejecucion = None
         self.refrescar_libros()
-        self.setWindowTitle("Procesamiento OCR")
+        self.setWindowTitle(TITULO)
         if codigo in (130, 143):
             tipo_pill(self.estado_general, "Detenido", "warn")
         elif codigo != 0:
@@ -2178,7 +2279,7 @@ class Ventana(QMainWindow):
             self._leer_resultados()
             if self.activos:
                 prom = sum(a["barra"].value() for a in self.activos.values()) // len(self.activos)
-                self.setWindowTitle(f"Procesamiento OCR · {prom}%")
+                self.setWindowTitle(f"{TITULO} · {prom}%")
 
     # ── Resultados ─────────────────────────────────────────────────────────
 
