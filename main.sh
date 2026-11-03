@@ -47,8 +47,8 @@ PNG_DIR="/mnt/datos/PNG"
 LOG_DIR="${SCRIPT_DIR}/logs"
 MAIN_LOG="${LOG_DIR}/main_${TIMESTAMP}.log"
 
-CSV_META="${SCRIPT_DIR}/TechnoMart Funza - TEMP.csv"
-LOGO_PNG="${SCRIPT_DIR}/logo.png"
+CSV_META="${SCRIPT_DIR}/recursos/TechnoMart Funza - TEMP.csv"
+LOGO_PNG="${SCRIPT_DIR}/recursos/logo.png"
 VENV_DIR="${SCRIPT_DIR}/ocr_env"
 RUN_OCR="${SCRIPT_DIR}/run_ocr.sh"
 MARCA_AGUA="${SCRIPT_DIR}/marca_agua.py"
@@ -798,7 +798,7 @@ usage() {
                         en INPUT. Úsalo junto con --only-book.
     --book <id>         Procesa ese libro; se puede repetir (lo usa la interfaz).
     --csv <ruta>        CSV de metadatos (default: junto a main.sh).
-    --logo <ruta>       Logo de la marca de agua (default: logo.png junto a main.sh).
+    --logo <ruta>       Logo de la marca de agua (default: recursos/logo.png).
     --ocr-jobs <N>      Procesos de Tesseract en paralelo (default: el de OCR.sh).
     --texto-marca <txt> Texto de la marca de agua al pie de página ("" = solo logo).
                         Default: CONGRESO DE LA REPÚBLICA - REPOSITORIO CÁMARA DE REPRESENTANTES

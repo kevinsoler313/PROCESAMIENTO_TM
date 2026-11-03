@@ -45,6 +45,9 @@ ICONO = Path(__file__).resolve().parent / "icono.png"
 # Ajustes guardados (QSettings). PROCESAMIENTO_PERFIL permite probar sin tocar los del usuario.
 PERFIL = os.environ.get("PROCESAMIENTO_PERFIL", "ProcesamientoOCR")
 MARCA_JSON = SCRIPT_DIR / "logs" / "marca_interfaz.json"   # lo que se pasa a main.sh
+# CSV de metadatos y logo que vienen con el programa; se usan si no se eligió otro
+CSV_INCLUIDO = SCRIPT_DIR / "recursos" / "TechnoMart Funza - TEMP.csv"
+LOGO_INCLUIDO = SCRIPT_DIR / "recursos" / "logo.png"
 
 # La vista previa usa el mismo código que estampa la marca en los PDF
 sys.path.insert(0, str(SCRIPT_DIR))
@@ -978,8 +981,8 @@ class Ventana(QMainWindow):
 
     def _seccion_version(self):
         lay, _ = self._card("CONFIGURACIÓN", "Versión del programa")
-        nota = QLabel("Busca en GitHub si hay una versión más nueva y la instala. Los ajustes, el CSV, "
-                      "el logo y las carpetas de datos se conservan.", objectName="sub")
+        nota = QLabel("Busca en GitHub si hay una versión más nueva y la instala. Los ajustes y las "
+                      "carpetas de datos se conservan.", objectName="sub")
         nota.setWordWrap(True)
         lay.addWidget(nota)
         fila = QHBoxLayout()
@@ -1033,7 +1036,7 @@ class Ventana(QMainWindow):
         r = QMessageBox.question(
             self, "Actualizar",
             f"Se instalará la versión {self.version_nueva} y el programa se reiniciará.\n"
-            "Los ajustes, el CSV, el logo y los datos se conservan.\n¿Continuar?")
+            "Los ajustes y las carpetas de datos se conservan.\n¿Continuar?")
         if r != QMessageBox.Yes:
             return
         self.btn_buscar_act.setEnabled(False)
@@ -2048,9 +2051,13 @@ class Ventana(QMainWindow):
         else:
             self.refrescar_sin_meta()
         csv = self.ajustes.value("csv", "")
+        if not (csv and Path(csv).is_file()) and CSV_INCLUIDO.is_file():
+            csv = str(CSV_INCLUIDO)
         if csv and Path(csv).is_file():
             self.cargar_csv(csv)
         logo = self.ajustes.value("logo", "")
+        if not (logo and Path(logo).is_file()) and LOGO_INCLUIDO.is_file():
+            logo = str(LOGO_INCLUIDO)
         if logo and Path(logo).is_file():
             self.cargar_logo(logo)
         self.png.setChecked(self.ajustes.value("png", "false") == "true")

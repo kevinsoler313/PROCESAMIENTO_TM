@@ -1,6 +1,5 @@
-# Datos del cliente: se seleccionan en la interfaz antes de procesar
+# CSV y logos sueltos no se suben; los del programa son excepciones (abajo)
 *.csv
-logo.png
 logo.*
 
 # Entorno y archivos generados
@@ -18,7 +17,11 @@ output/
 *.png
 *.jpg
 *.jpeg
-# …salvo la imagen propia de la interfaz
+# …salvo los archivos del programa: imágenes de la interfaz, logo de la marca
+# de agua, CSV de metadatos y plantillas de los CSV que genera
+!recursos/logo.png
+!recursos/*.csv
+!plantillas/*.csv
 !interfaz/logo_technomart.jpg
 !interfaz/icono.png
 !interfaz/*.svg

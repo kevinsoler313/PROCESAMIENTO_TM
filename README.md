@@ -115,8 +115,8 @@ hay una más nueva, el botón **Actualizar** hace lo siguiente:
 3. Corre `instalar_interfaz.sh` si cambió `requirements.txt` o el instalador.
 4. Reinicia el programa.
 
-No se tocan los ajustes de la interfaz (`~/.config/TechnoMart/`), el CSV, el
-logo, `ocr_env` ni las carpetas de datos, porque no están en el repositorio.
+No se tocan los ajustes de la interfaz (`~/.config/TechnoMart/`),
+`ocr_env` ni las carpetas de datos, porque no están en el repositorio.
 Se necesita que el equipo se haya instalado con `git clone`.
 
 Desde la terminal:
@@ -191,16 +191,22 @@ python3 registro_ocr_icr.py --pdf-dir /mnt/datos/OUTPUT --tiff-dir /datos/TIFF -
 
 El formato del JSON de `--marca-config` está en la cabecera de `marca_agua.py`.
 
-## Archivos que no están en el repositorio
+## Archivos de datos incluidos
 
-Son datos del cliente y se eligen en la interfaz (o con `--csv` y `--logo`):
+Todos los equipos usan los mismos:
 
-- CSV de metadatos por libro, sin encabezado:
-  `codigo,fondo,subfondo,equipo,resolucion`
-- Logo de la marca de agua
+| Archivo | Uso |
+|---|---|
+| `recursos/TechnoMart Funza - TEMP.csv` | CSV de metadatos por libro, sin encabezado: `codigo,fondo,subfondo,equipo,resolucion` |
+| `recursos/logo.png` | Logo de la marca de agua |
+| `plantillas/contenedores_GDOC.csv` | Encabezados del CSV de Crear contenedores GDOC |
+| `plantillas/registro_OCR-ICR.csv` | Encabezados del CSV de Crear registro OCR-ICR |
 
-Sin esas opciones, `main.sh` los busca junto a sí mismo como
-`TechnoMart Funza - TEMP.csv` y `logo.png`.
+La interfaz usa el CSV y el logo incluidos, salvo que se elija otro. Lo mismo
+hace `main.sh` sin `--csv` ni `--logo`. Al actualizar, un CSV o logo nuevo
+llega a todos los equipos con Buscar actualización.
+
+**El repositorio es público:** estos archivos son visibles para cualquiera.
 
 ## Uso desde la terminal
 
