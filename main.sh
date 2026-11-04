@@ -60,6 +60,10 @@ source "${SCRIPT_DIR}/metadatos.sh" || { echo "Falta ${SCRIPT_DIR}/metadatos.sh"
 
 # Registro CSV principal (solo libros exitosos)
 REGISTRO_CSV="${REGISTRO_DIR}/registro_libros_procesados.csv"
+REGISTRO_OCR_ICR="${SCRIPT_DIR}/registro_ocr_icr.py"
+# Entrega a la que pertenecen los libros de esta ejecución (--entrega 1-30); va en
+# el registro OCR-ICR del día. Vacío = la columna ENTREGA queda en blanco.
+ENTREGA=""
 # Registro de libros enviados a REVIEW
 REVIEW_LOG="${REVIEW_DIR}/review_log.csv"
 SIN_META_TXT="${LOG_DIR}/sin_metadatos_${TIMESTAMP}.txt"
@@ -590,6 +594,18 @@ step7_register() {
         >> "$REGISTRO_CSV"
 
     log_ok "[${book_name}] Registrado → ${status} | ${n_pages} pág | PDF: ${peso_pdf_mb} MB"
+
+    # Registro OCR-ICR del día (REGISTRO/registro OCR-ICR <d> <Mes> <aaaa>.csv): todo
+    # PDF entregado, con o sin metadatos. Los TIFF todavía están en INPUT.
+    local -a ro_args=(agregar --registro-dir "$REGISTRO_DIR" --pdf "$final_pdf"
+                      --tiff-dir "${INPUT_DIR}/${book_name}" --hash "$sha256")
+    [[ -n "$ENTREGA" ]] && ro_args+=(--entrega "$ENTREGA")
+    local ro_csv
+    if ro_csv=$(python3 "$REGISTRO_OCR_ICR" "${ro_args[@]}" 2>>"$MAIN_LOG"); then
+        log_ok "[${book_name}] Agregado al registro OCR-ICR → $(basename "$ro_csv")"
+    else
+        log_warn "[${book_name}] No se pudo agregar al registro OCR-ICR del día (ver log)."
+    fi
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -808,6 +824,8 @@ usage() {
                         Default: CONGRESO DE LA REPÚBLICA - REPOSITORIO CÁMARA DE REPRESENTANTES
     --marca-diagonal <txt>  Marca diagonal opcional (de abajo-izquierda a arriba-derecha),
                         p. ej. "CÁMARA DE REPRESENTANTES". Default: sin marca diagonal.
+    --entrega <1-30>    Entrega de estos libros; va en el registro OCR-ICR del día
+                        (REGISTRO/registro OCR-ICR <d> <Mes> <aaaa>.csv).
     --meta-config <json>   Qué columna del CSV es el código y cómo se arma cada campo
                         del PDF (formato en la cabecera de metadatos.py). Default: los de siempre.
     --marca-config <json>  Posición, transparencia y tamaño de logo, texto y diagonal
@@ -869,6 +887,7 @@ parse_args() {
             --marca-diagonal)   DIAGONAL_TEXT="$2"; shift 2 ;;
             --marca-config)     MARCA_CONFIG="$2"; shift 2 ;;
             --meta-config)      META_CONFIG="$2"; shift 2 ;;
+            --entrega)          ENTREGA="$2"; shift 2 ;;
             --input-dir)        INPUT_DIR="$2"; shift 2 ;;
             --output-dir)       OUTPUT_DIR="$2"; shift 2 ;;
             --temp-dir)         TEMP_DIR="$2"; shift 2 ;;

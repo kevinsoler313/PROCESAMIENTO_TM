@@ -862,7 +862,7 @@ class Ventana(QMainWindow):
 
         # ── Sección CREAR CONTENEDORES GDOC ──
         self.col = self._pagina("CREAR CONTENEDORES GDOC", "contenedor",
-                                "CSV para importar en GDOC los libros terminados")
+                                "Excel para importar en GDOC los libros terminados")
         self._seccion_gdoc()
         self.col.addStretch()
 
@@ -1285,9 +1285,9 @@ class Ventana(QMainWindow):
         os.execv(sys.executable, [sys.executable, str(Path(__file__).resolve())])
 
     def _seccion_gdoc(self):
-        """CSV con la plantilla layout_importar_contenedores: una fila por PDF de la carpeta elegida."""
+        """XLSX con la plantilla layout_importar_contenedores: una fila por PDF de la carpeta elegida."""
         lay, _ = self._card("CREAR CONTENEDORES GDOC", "Configuración previa")
-        nota = QLabel("Se genera un CSV con una fila por cada PDF de la carpeta de PDF (solo los que están "
+        nota = QLabel("Se genera un Excel (.xlsx) con una fila por cada PDF de la carpeta de PDF (solo los que están "
                       "directamente en ella; subcarpetas como SIN METADATOS no se incluyen). Columnas fijas: "
                       "resguardo ARCHIVO, estatus DENTRO, nivel1 CONSORCIO D3LF1N y nivel2 CAMARA DE "
                       "REPRESENTANTES.", objectName="sub")
@@ -1361,7 +1361,7 @@ class Ventana(QMainWindow):
         self.gdoc_aviso = QLabel(objectName="aviso")
         self.gdoc_aviso.setWordWrap(True)
         abajo.addWidget(self.gdoc_aviso, 1)
-        self.btn_gdoc = QPushButton("Generar CSV", objectName="primario")
+        self.btn_gdoc = QPushButton("Generar Excel", objectName="primario")
         self.btn_gdoc.clicked.connect(self.generar_gdoc)
         abajo.addWidget(self.btn_gdoc)
         lay.addLayout(abajo)
@@ -1742,16 +1742,19 @@ class Ventana(QMainWindow):
             return
         self.gdoc_aviso.setText("")
         entrega = self.gdoc_entrega.currentData()
-        sugerido = Path(self.carpetas["registro"]) / f"contenedores_ENTREGA_{entrega}_{sede.replace(' ', '_')}.csv"
-        destino, _ = QFileDialog.getSaveFileName(self, "Guardar CSV de contenedores", str(sugerido), "CSV (*.csv)")
+        sugerido = Path(self.carpetas["registro"]) / f"contenedores_ENTREGA_{entrega}_{sede.replace(' ', '_')}.xlsx"
+        destino, _ = QFileDialog.getSaveFileName(self, "Guardar Excel de contenedores", str(sugerido),
+                                                 "Excel (*.xlsx)")
         if not destino:
             return
+        if Path(destino).suffix.lower() != ".xlsx":
+            destino += ".xlsx"
         filas = [CG.fila(self.gdoc_libros[i][0], self.gdoc_libros[i][2], entrega, sede) for i in seleccion]
         try:
             Path(destino).parent.mkdir(parents=True, exist_ok=True)
-            CG.escribir_csv(destino, filas)
+            CG.escribir_xlsx(destino, filas)
         except OSError as e:
-            QMessageBox.warning(self, "Generar CSV", f"No se pudo guardar el CSV.\n{e}")
+            QMessageBox.warning(self, "Generar Excel", f"No se pudo guardar el Excel.\n{e}")
             return
         paginas = sum(f[10] for f in filas)
         paginas_txt = f"{paginas:,}".replace(",", ".")
@@ -2181,6 +2184,17 @@ class Ventana(QMainWindow):
         self.png.toggled.connect(lambda v: self.ajustes.setValue("png", "true" if v else "false"))
         abajo.addWidget(self.png)
         abajo.addSpacing(16)
+        # Entrega de estos libros: va en el registro OCR-ICR del día (carpeta REGISTRO)
+        abajo.addWidget(QLabel("Entrega", objectName="subtitulo"))
+        self.entrega_proc = QComboBox()
+        for n in RO.ENTREGAS:
+            self.entrega_proc.addItem(f"ENTREGA {n:02d}", n)
+        self.entrega_proc.setToolTip("Se escribe en el registro OCR-ICR del día, en la carpeta REGISTRO")
+        self.entrega_proc.setCurrentIndex(max(self.entrega_proc.findData(int(self.ajustes.value("entrega_proc", 1))), 0))
+        self.entrega_proc.currentIndexChanged.connect(
+            lambda _: self.ajustes.setValue("entrega_proc", self.entrega_proc.currentData()))
+        abajo.addWidget(self.entrega_proc)
+        abajo.addSpacing(16)
         self.aviso = QLabel(objectName="aviso")
         abajo.addWidget(self.aviso, 1)
         self.btn_iniciar = QPushButton("▶  Iniciar procesamiento", objectName="primario")
@@ -2604,6 +2618,7 @@ class Ventana(QMainWindow):
                 "--jobs", str(self.jobs.value()), "--ocr-jobs", str(self.ocr_slider.value())]
         if self.png.isChecked():
             args.append("--png")
+        args += ["--entrega", str(self.entrega_proc.currentData())]
         self.ajustes.setValue("texto_marca", self.texto_marca.currentText())
         args += ["--texto-marca",
                  self.texto_marca.currentText() if self.marca_activa["texto"].isChecked() else ""]
@@ -2643,7 +2658,7 @@ class Ventana(QMainWindow):
     def _en_marcha(self, si):
         self.btn_iniciar.setEnabled(not si)
         self.btn_detener.setEnabled(si)
-        for w in (self.tabla, self.ocr_slider, self.jobs, self.png, self.ram, self.hilos,
+        for w in (self.tabla, self.ocr_slider, self.jobs, self.png, self.entrega_proc, self.ram, self.hilos,
                   self.gpu, self.btn_recomendado, self.btn_carpetas_def, *self.botones_carpeta,
                   self.texto_marca, *self.marca_activa.values(), self.btn_logo, self.btn_marca_def,
                   *self.meta.widgets,

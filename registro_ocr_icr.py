@@ -16,14 +16,23 @@
 #
 #           La carpeta de TIFF de un libro puede llamarse como el código o con
 #           " OK" al final (como llegan a INPUT).
+#
+#           Registro del día: main.sh agrega cada PDF que entrega (en OUTPUT o en
+#           OUTPUT/SIN METADATOS) a REGISTRO/registro OCR-ICR <d> <Mes> <aaaa>.csv
+#           (p. ej. "registro OCR-ICR 4 Nov 2026.csv"). Un archivo por día: si un
+#           libro se reprocesa ese día, su fila se reemplaza.
 # USO:
 #   python3 registro_ocr_icr.py --pdf-dir /mnt/datos/OUTPUT --tiff-dir /datos/TIFF \
 #       --entrega 6 --salida registro.csv [--book AR10582 --book …]
+#   python3 registro_ocr_icr.py agregar --registro-dir /mnt/datos/REGISTRO \
+#       --pdf OUTPUT/AR10582.pdf --tiff-dir INPUT/AR10582 [--entrega 6] [--hash …]
 # =============================================================================
 
 import argparse
 import csv
 import hashlib
+import io
+import os
 import re
 import sys
 from datetime import date
@@ -33,6 +42,7 @@ ENCABEZADOS = ["CODIFICACION", "LIBRO ", "# IMAGENES", "PESO DE PDF", "PESO DE C
                "FECHA", "ENTREGA  ", "HASH", ""]
 ENTREGAS = range(1, 31)
 EXT_TIFF = {".tif", ".tiff"}
+MESES = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"]
 
 
 def libros_pdf(pdf_dir):
@@ -89,7 +99,7 @@ def fila(codigo, imagenes, bytes_pdf, bytes_tiff, entrega, hash_pdf, fecha=None)
     fecha = fecha or date.today()
     return [codigo, numero_libro(codigo), imagenes, decimal_coma(bytes_pdf / 1024 ** 2),
             decimal_coma(bytes_tiff / 1024 ** 3), f"{fecha.day}/{fecha.month}/{fecha.year}",
-            f"ENTREGA {entrega:02d}", hash_pdf, ""]
+            f"ENTREGA {entrega:02d}" if entrega else "", hash_pdf, ""]
 
 
 def escribir_csv(destino, filas):
@@ -100,7 +110,49 @@ def escribir_csv(destino, filas):
         w.writerows(filas)
 
 
+def nombre_diario(fecha=None):
+    fecha = fecha or date.today()
+    return f"registro OCR-ICR {fecha.day} {MESES[fecha.month - 1]} {fecha.year}.csv"
+
+
+def agregar(registro_dir, nueva):
+    """Agrega una fila al registro del día; si el libro ya estaba, la reemplaza.
+    Con varios libros en paralelo, el archivo se bloquea mientras se reescribe."""
+    import fcntl
+    Path(registro_dir).mkdir(parents=True, exist_ok=True)
+    ruta = Path(registro_dir) / nombre_diario()
+    fd = os.open(ruta, os.O_RDWR | os.O_CREAT, 0o664)
+    with os.fdopen(fd, "r+b") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        filas = list(csv.reader(io.StringIO(f.read().decode("utf-8-sig"))))
+        datos = [r for r in filas[1:] if r and r[0] != nueva[0]]
+        salida = io.StringIO()
+        w = csv.writer(salida, lineterminator="\r\n")
+        w.writerow(ENCABEZADOS)
+        w.writerows([*datos, nueva])
+        f.seek(0)
+        f.truncate()
+        f.write(salida.getvalue().encode("utf-8-sig"))
+    return ruta
+
+
+def main_agregar(argv):
+    p = argparse.ArgumentParser(description="Agrega un PDF al registro OCR-ICR del día")
+    p.add_argument("--registro-dir", required=True)
+    p.add_argument("--pdf", required=True)
+    p.add_argument("--tiff-dir", required=True, help="Carpeta de TIFF del libro")
+    p.add_argument("--entrega", type=int, choices=list(ENTREGAS))
+    p.add_argument("--hash", help="SHA-256 del PDF, si ya se calculó")
+    a = p.parse_args(argv)
+    pdf = Path(a.pdf)
+    n, peso_tiff = datos_tiff(Path(a.tiff_dir))
+    nueva = fila(pdf.stem, n, pdf.stat().st_size, peso_tiff, a.entrega, a.hash or sha256(pdf))
+    print(agregar(a.registro_dir, nueva))
+
+
 def main():
+    if sys.argv[1:2] == ["agregar"]:
+        return main_agregar(sys.argv[2:])
     p = argparse.ArgumentParser(description="CSV de registro OCR-ICR de una entrega")
     p.add_argument("--pdf-dir", required=True)
     p.add_argument("--tiff-dir", required=True)

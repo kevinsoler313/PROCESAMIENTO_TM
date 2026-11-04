@@ -37,7 +37,7 @@ solo la sugerencia del botón "Usar /mnt/datos" y el valor por defecto de
 | `OUTPUT/SIN METADATOS/` | PDFs de libros que no estaban en el CSV; se completan con `inyectar_metadatos.sh` |
 | `TEMPORALES/` | Intermedios de cada libro; la carpeta del libro es también su candado |
 | `REVIEW/` | Libros rechazados (DPI, corruptos, páginas que no coinciden) y `review_log.csv` |
-| `REGISTRO/` | `registro_libros_procesados.csv` con páginas, pesos, estado y SHA-256 |
+| `REGISTRO/` | `registro_libros_procesados.csv` con páginas, pesos, estado y SHA-256, y el registro OCR-ICR de cada día |
 | `PNG/` | PNG por página, solo si se exportan PNG (opcional) |
 
 En la interfaz se eligen INPUT, OUTPUT, REVIEW y PNG. TEMPORALES y REGISTRO se
@@ -98,7 +98,7 @@ una barra lateral:
   que puede ser distinto al del procesamiento, les escribe los metadatos a los
   que estén, los pasa a OUTPUT y actualiza el registro a `OK`; avisa cuáles
   siguen sin aparecer. Usa las carpetas de Procesamiento › CARPETAS DE TRABAJO.
-- **Crear contenedores GDOC:** genera el CSV para importar contenedores en GDOC
+- **Crear contenedores GDOC:** genera el Excel (.xlsx) para importar contenedores en GDOC
   (ver abajo). Se eligen la carpeta de PDF (por defecto OUTPUT), la entrega
   (ENTREGA 1 a 30) y los libros.
 - **Crear registro OCR-ICR:** genera el CSV de registro de una entrega (ver
@@ -157,7 +157,7 @@ git tag v1.1.0 && git push origin main --tags
 
 ## Contenedores GDOC
 
-`contenedores_gdoc.py` crea un CSV con los encabezados de la plantilla
+`contenedores_gdoc.py` crea un Excel (.xlsx, hoja "Hoja1") con los encabezados de la plantilla
 `layout_importar_contenedores.xls` y una fila por cada PDF de la carpeta elegida, por defecto OUTPUT (los de
 `SIN METADATOS` no entran):
 
@@ -172,11 +172,19 @@ git tag v1.1.0 && git push origin main --tags
 | ubicacion, posicion, Campo_4, Campo_5 | Vacíos |
 
 ```bash
-python3 contenedores_gdoc.py --output-dir /mnt/datos/OUTPUT --entrega 10 --sede FUNZA --salida contenedores.csv
+python3 contenedores_gdoc.py --output-dir /mnt/datos/OUTPUT --entrega 10 --sede FUNZA --salida contenedores.xlsx
 ```
 
 ## Registro OCR-ICR
 
+**Automático, al procesar:** cada PDF que se entrega, con o sin metadatos, se
+agrega a `REGISTRO/registro OCR-ICR <d> <Mes> <aaaa>.csv`, por ejemplo
+`registro OCR-ICR 4 Nov 2026.csv`. Es un archivo por día: si un libro se
+reprocesa ese día, su fila se reemplaza. Los libros que van a REVIEW o quedan
+por reintentar no entran. La entrega se elige en PROCESAR, junto a «Iniciar
+procesamiento» (`--entrega` en `main.sh`).
+
+**Desde la sección Crear registro OCR-ICR:**
 `registro_ocr_icr.py` crea un CSV con las columnas de la hoja de la sede y una
 fila por cada PDF de la carpeta de PDF (solo la raíz).
 
@@ -224,7 +232,7 @@ Todos los equipos usan los mismos:
 | `recursos/TechnoMart Funza - TEMP.csv` | CSV de metadatos por libro, sin encabezado: `codigo,fondo,subfondo,equipo,resolucion` |
 | `recursos/logo.png` | Logo de la marca de agua |
 | `plantillas/layout_importar_contenedores.xls` | Plantilla oficial de GDOC para importar contenedores |
-| `plantillas/contenedores_GDOC.csv` | Encabezados del CSV de Crear contenedores GDOC |
+| `plantillas/contenedores_GDOC.xlsx` | Encabezados del Excel de Crear contenedores GDOC |
 | `plantillas/registro_OCR-ICR.csv` | Encabezados del CSV de Crear registro OCR-ICR |
 
 La interfaz usa el CSV y el logo incluidos, salvo que se elija otro. Lo mismo
