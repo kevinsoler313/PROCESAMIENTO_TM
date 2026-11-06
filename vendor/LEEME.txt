@@ -1,0 +1,3 @@
+xlwt 1.3.0 (licencia BSD, https://pypi.org/project/xlwt/), sin modificar.
+Escribe el .xls de contenedores GDOC. Va dentro del proyecto para que ningún
+equipo tenga que instalarlo, incluidos los que no llegan a internet.

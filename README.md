@@ -98,7 +98,7 @@ una barra lateral:
   que puede ser distinto al del procesamiento, les escribe los metadatos a los
   que estén, los pasa a OUTPUT y actualiza el registro a `OK`; avisa cuáles
   siguen sin aparecer. Usa las carpetas de Procesamiento › CARPETAS DE TRABAJO.
-- **Crear contenedores GDOC:** genera el Excel (.xlsx) para importar contenedores en GDOC
+- **Crear contenedores GDOC:** genera el Excel (.xls) para importar contenedores en GDOC
   (ver abajo). Se eligen la carpeta de PDF (por defecto OUTPUT), la entrega
   (ENTREGA 1 a 30) y los libros.
 - **Crear registro OCR-ICR:** genera el CSV de registro de una entrega (ver
@@ -157,7 +157,7 @@ git tag v1.1.0 && git push origin main --tags
 
 ## Contenedores GDOC
 
-`contenedores_gdoc.py` crea un Excel (.xlsx, hoja "Hoja1") con los encabezados de la plantilla
+`contenedores_gdoc.py` crea un Excel (.xls, hoja "Hoja1") con los encabezados de la plantilla
 `layout_importar_contenedores.xls` y una fila por cada PDF de la carpeta elegida, por defecto OUTPUT (los de
 `SIN METADATOS` no entran):
 
@@ -172,7 +172,7 @@ git tag v1.1.0 && git push origin main --tags
 | ubicacion, posicion, Campo_4, Campo_5 | Vacíos |
 
 ```bash
-python3 contenedores_gdoc.py --output-dir /mnt/datos/OUTPUT --entrega 10 --sede FUNZA --salida contenedores.xlsx
+python3 contenedores_gdoc.py --output-dir /mnt/datos/OUTPUT --entrega 10 --sede FUNZA --salida contenedores.xls
 ```
 
 ## Registro OCR-ICR
@@ -232,7 +232,6 @@ Todos los equipos usan los mismos:
 | `recursos/TechnoMart Funza - TEMP.csv` | CSV de metadatos por libro, sin encabezado: `codigo,fondo,subfondo,equipo,resolucion` |
 | `recursos/logo.png` | Logo de la marca de agua |
 | `plantillas/layout_importar_contenedores.xls` | Plantilla oficial de GDOC para importar contenedores |
-| `plantillas/contenedores_GDOC.xlsx` | Encabezados del Excel de Crear contenedores GDOC |
 | `plantillas/registro_OCR-ICR.csv` | Encabezados del CSV de Crear registro OCR-ICR |
 
 La interfaz usa el CSV y el logo incluidos, salvo que se elija otro. Lo mismo

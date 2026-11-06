@@ -1285,9 +1285,9 @@ class Ventana(QMainWindow):
         os.execv(sys.executable, [sys.executable, str(Path(__file__).resolve())])
 
     def _seccion_gdoc(self):
-        """XLSX con la plantilla layout_importar_contenedores: una fila por PDF de la carpeta elegida."""
+        """XLS con la plantilla layout_importar_contenedores: una fila por PDF de la carpeta elegida."""
         lay, _ = self._card("CREAR CONTENEDORES GDOC", "Configuración previa")
-        nota = QLabel("Se genera un Excel (.xlsx) con una fila por cada PDF de la carpeta de PDF (solo los que están "
+        nota = QLabel("Se genera un Excel (.xls) con una fila por cada PDF de la carpeta de PDF (solo los que están "
                       "directamente en ella; subcarpetas como SIN METADATOS no se incluyen). Columnas fijas: "
                       "resguardo ARCHIVO, estatus DENTRO, nivel1 CONSORCIO D3LF1N y nivel2 CAMARA DE "
                       "REPRESENTANTES.", objectName="sub")
@@ -1742,17 +1742,17 @@ class Ventana(QMainWindow):
             return
         self.gdoc_aviso.setText("")
         entrega = self.gdoc_entrega.currentData()
-        sugerido = Path(self.carpetas["registro"]) / f"contenedores_ENTREGA_{entrega}_{sede.replace(' ', '_')}.xlsx"
+        sugerido = Path(self.carpetas["registro"]) / f"contenedores_ENTREGA_{entrega}_{sede.replace(' ', '_')}.xls"
         destino, _ = QFileDialog.getSaveFileName(self, "Guardar Excel de contenedores", str(sugerido),
-                                                 "Excel (*.xlsx)")
+                                                 "Excel (*.xls)")
         if not destino:
             return
-        if Path(destino).suffix.lower() != ".xlsx":
-            destino += ".xlsx"
+        if Path(destino).suffix.lower() != ".xls":
+            destino += ".xls"
         filas = [CG.fila(self.gdoc_libros[i][0], self.gdoc_libros[i][2], entrega, sede) for i in seleccion]
         try:
             Path(destino).parent.mkdir(parents=True, exist_ok=True)
-            CG.escribir_xlsx(destino, filas)
+            CG.escribir_xls(destino, filas)
         except OSError as e:
             QMessageBox.warning(self, "Generar Excel", f"No se pudo guardar el Excel.\n{e}")
             return
