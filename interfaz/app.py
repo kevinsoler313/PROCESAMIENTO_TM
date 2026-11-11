@@ -117,8 +117,13 @@ SEDES = CG.SEDES
 
 TEXTOS_MARCA = [
     "CONGRESO DE LA REPÚBLICA - REPOSITORIO CÁMARA DE REPRESENTANTES",
-    "DIGITALIZADO CAMARA DE REPRESENTANTES_BIBLIOTECA NACIONAL",
+    "DIGITALIZADO CAMARA DE REPRESENTANTES_BIBLIOTECA NACIONAL DE COLOMBIA",
 ]
+# Textos que cambiaron: el guardado en los ajustes pasa al nuevo al abrir
+TEXTOS_MARCA_ANTERIORES = {
+    "DIGITALIZADO CAMARA DE REPRESENTANTES_BIBLIOTECA NACIONAL":
+        "DIGITALIZADO CAMARA DE REPRESENTANTES_BIBLIOTECA NACIONAL DE COLOMBIA",
+}
 # Marca diagonal opcional (ascendente de izquierda a derecha), también fija
 MARCA_DIAGONAL = "CÁMARA DE REPRESENTANTES"
 
@@ -462,6 +467,16 @@ def formato_gb(nbytes):
 # ─────────────────────────────────────────────────────────────────────────────
 # CSV DE METADATOS → CAMPOS DEL PDF (Procesamiento › METADATOS e Inyectar)
 # ─────────────────────────────────────────────────────────────────────────────
+
+class ComboCompleto(QComboBox):
+    """Combo angosto cuya lista desplegable se abre al ancho del texto más largo."""
+
+    def showPopup(self):
+        vista = self.view()
+        vista.setTextElideMode(Qt.ElideNone)
+        vista.setMinimumWidth(vista.sizeHintForColumn(0) + 2 * vista.frameWidth() + 24)
+        super().showPopup()
+
 
 class PanelMetadatos(QObject):
     """CSV de metadatos, qué columna es el código del libro y cómo se arma cada campo
@@ -1565,7 +1580,7 @@ class Ventana(QMainWindow):
         caja_txt = QFrame(objectName="selector")
         ht = QVBoxLayout(caja_txt)
         ht.setContentsMargins(10, 8, 10, 8)
-        self.texto_marca = QComboBox()
+        self.texto_marca = ComboCompleto()
         self.texto_marca.addItems(TEXTOS_MARCA)
         # Un texto largo no debe ensanchar la ventana: el combo usa solo su columna
         self.texto_marca.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
@@ -1575,6 +1590,12 @@ class Ventana(QMainWindow):
             lambda _: self._aplicando or self.ajustes.setValue("texto_marca", self.texto_marca.currentText()))
         self.texto_marca.setToolTip(self.texto_marca.currentText())
         ht.addWidget(self.texto_marca)
+        # El texto elegido, completo y en varias líneas si no cabe
+        self.texto_marca_completo = QLabel(self.texto_marca.currentText(), objectName="sub")
+        self.texto_marca_completo.setWordWrap(True)
+        self.texto_marca_completo.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.texto_marca.currentTextChanged.connect(self.texto_marca_completo.setText)
+        ht.addWidget(self.texto_marca_completo)
         cols.addWidget(caja_txt, 1, 1)
 
         caja_diag = QFrame(objectName="selector")
@@ -2297,7 +2318,8 @@ class Ventana(QMainWindow):
                    "diagonal": self.ajustes.value("diagonal", "false") == "true"}
         # Todo con _aplicando: cada cambio guarda, y no debe pisar lo que falta leer
         self._aplicando = True
-        indice = self.texto_marca.findText(self.ajustes.value("texto_marca", ""))
+        guardado = self.ajustes.value("texto_marca", "")
+        indice = self.texto_marca.findText(TEXTOS_MARCA_ANTERIORES.get(guardado, guardado))
         self.texto_marca.setCurrentIndex(max(indice, 0))
         for elem, casilla in self.marca_activa.items():
             casilla.setChecked(activos[elem])

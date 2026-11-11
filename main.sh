@@ -6,7 +6,7 @@
 # FECHA:    2026-02-23
 # DESC:     Coordina el pipeline completo por libro:
 #
-#   PASO 1 · Renombrar carpetas "NNN OK" → "NNN" en input/
+#   PASO 1 · Quitar " OK" a la carpeta del libro (solo al empezar ese libro)
 #   PASO 2 · OCR (run_ocr.sh) → PDF por libro
 #   PASO 3 · Marca de agua (pypdf + reportlab + logo.png)
 #   PASO 4 · Conversión PDF/A-3b v1.7 (ocrmypdf --skip-text)
@@ -309,34 +309,34 @@ load_csv_index() {
 cleanup_temp() { if [[ -n "$TEMP_META" && -f "$TEMP_META" ]]; then rm -f "$TEMP_META"; fi; }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PASO 1 · RENOMBRAR CARPETAS "NNN OK" → "NNN"
+# PASO 1 · QUITAR " OK" A LA CARPETA DEL LIBRO, JUSTO ANTES DE PROCESARLO
 # ─────────────────────────────────────────────────────────────────────────────
 
-step1_rename_input() {
-    log_step "══ PASO 1: Renombrar carpetas (eliminar ' OK') ══"
-    local renamed=0 skipped=0
+# "AR10582 OK" → "AR10582" (sin distinguir mayúsculas, espacios finales fuera)
+sin_ok() {
+    local n="$1"
+    if [[ "$n" =~ [[:space:]][Oo][Kk]$ ]]; then
+        n="${n%[[:space:]]*[Oo][Kk]}"
+    fi
+    printf '%s' "${n%"${n##*[![:space:]]}"}"
+}
 
+# Solo se renombra el libro que se va a procesar, con su candado ya tomado:
+# si la ejecución se cancela, los libros que no se alcanzaron conservan " OK".
+step1_rename_book() {
+    local book_name="$1"
+    [[ -d "${INPUT_DIR}/${book_name}" ]] && return 0
+    local dir name
     while IFS= read -r dir; do
-        local name; name="$(basename "$dir")"
-        # Detectar si termina en " OK" o " ok" (case insensitive)
-        if [[ "$name" =~ [[:space:]][Oo][Kk]$ ]]; then
-            local new_name="${name%[[:space:]]*[Oo][Kk]}"
-            new_name="${new_name%"${new_name##*[![:space:]]}"}"  # trim trailing spaces
-            local new_path="${INPUT_DIR}/${new_name}"
-            if [[ -d "$new_path" ]]; then
-                log_warn "Ya existe destino '$new_name', omitiendo renombrado de: $name"
-                skipped=$((skipped+1))
-            elif [[ -d "$dir" ]]; then
-                # Verificación doble para evitar race conditions en ejecuciones simultáneas
-                mv "$dir" "$new_path" 2>/dev/null && {
-                    log_ok "Renombrado: '$name' → '$new_name'"
-                    renamed=$((renamed+1))
-                } || skipped=$((skipped+1))
-            fi
+        name="$(basename "$dir")"
+        [[ "$name" != "$book_name" && "$(sin_ok "$name")" == "$book_name" ]] || continue
+        if mv "$dir" "${INPUT_DIR}/${book_name}" 2>/dev/null; then
+            log_ok "[${book_name}] Carpeta renombrada: '$name' → '$book_name'"
+            return 0
         fi
     done < <(find "$INPUT_DIR" -mindepth 1 -maxdepth 1 -type d | sort)
-
-    log_ok "Paso 1 completado: $renamed renombradas, $skipped omitidas."
+    log_error "[${book_name}] No se encontró su carpeta en INPUT."
+    return 1
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -841,7 +841,7 @@ usage() {
     -h, --help          Muestra esta ayuda.
 
   FLUJO COMPLETO:
-    1 · Renombrar carpetas input ("NNN OK" → "NNN")
+    1 · Quitar " OK" a la carpeta (solo del libro que empieza)
     2 · OCR          run_ocr.sh → PDF por libro
     3 · Marca agua   logo.png + texto en cada página
     4 · PDF/A-3b     ocrmypdf --skip-text --pdf-version 1.7
@@ -939,28 +939,23 @@ main() {
     check_deps
     load_csv_index
 
-    # ── PASO 1: Renombrar ──
-    step1_rename_input
-
     log_info "Resultados de esta ejecución: ${RESULTS_FILE}"
 
     # ── Descubrir libros a procesar (desde INPUT_DIR) ──
     local book_list=()
+    # Los nombres van sin " OK"; la carpeta se renombra al empezar cada libro
     if [[ -n "$ONLY_BOOK" ]]; then
-        book_list=("$ONLY_BOOK")
+        book_list=("$(sin_ok "$ONLY_BOOK")")
     elif [[ ${#BOOKS[@]} -gt 0 ]]; then
-        # --book (interfaz): mismo recorte de " OK" que hizo el paso 1
         local b
         for b in "${BOOKS[@]}"; do
-            b="${b%[[:space:]][Oo][Kk]}"
-            book_list+=("${b%"${b##*[![:space:]]}"}")
+            book_list+=("$(sin_ok "$b")")
         done
     else
         while IFS= read -r d; do
-            if [[ -d "$d" ]]; then
-                book_list+=("$(basename "$d")")
-            fi
-        done < <(find "$INPUT_DIR" -mindepth 1 -maxdepth 1 -type d | sort)
+            book_list+=("$d")
+        done < <(find "$INPUT_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' \
+                 | while IFS= read -r n; do sin_ok "$n"; echo; done | sort -u)
     fi
 
     if [[ ${#book_list[@]} -eq 0 ]]; then
@@ -1017,6 +1012,13 @@ main() {
         # ─── MECANISMO DE LOCK (Multi-terminal - Basado en Carpeta TEMPORALES) ───
         if ! mkdir "${TEMP_DIR}/${book}" 2>/dev/null; then
             log_info "[${book}] Carpeta en TEMPORALES detectada. Saltando (ya en proceso por otra terminal)."
+            continue
+        fi
+
+        # ── PASO 1: quitar " OK" solo a este libro (con el candado ya tomado) ──
+        if ! step1_rename_book "$book"; then
+            rm -rf "${TEMP_DIR}/${book}" 2>/dev/null || true
+            record_result REINTENTAR "$book" "Carpeta no encontrada en INPUT"
             continue
         fi
 

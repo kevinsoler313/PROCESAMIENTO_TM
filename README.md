@@ -11,7 +11,7 @@ Está pensado para Linux (probado en Ubuntu 26.04 y en WSL).
 ```
 INPUT/<libro>/*.tif
   └─ main.sh
-       1. Quita " OK" del nombre de la carpeta
+       1. Quita " OK" del nombre de la carpeta (solo al empezar ese libro)
        2. OCR.sh (vía run_ocr.sh)
             · preprocess_validate.py: DPI = 300 y sin imágenes corruptas,
               copia reducida de imágenes > 300 MB (el original no se toca)

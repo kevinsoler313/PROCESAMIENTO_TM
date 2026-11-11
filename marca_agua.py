@@ -98,7 +98,7 @@ def dibujar(c, pw, ph, cfg, logo):
     """Dibuja logo, texto y diagonal sobre el canvas c de una página pw × ph."""
     margin_x = _clamp(MARGIN_FRAC * pw, MARGIN_FLOOR, MARGIN_CAP)
     margin_top = _clamp(MARGIN_FRAC * ph, MARGIN_FLOOR, MARGIN_CAP)
-    text_y = _clamp(0.5 * MARGIN_FRAC * ph, 4, 0.5 * CM_TO_POINTS)
+    text_y = _clamp(0.25 * MARGIN_FRAC * ph, 3, 0.2 * CM_TO_POINTS)   # pegado al borde: 2 mm en A4
 
     # ── Texto al pie (o donde se ubique): la fuente se encoge para que SIEMPRE quepa
     t = cfg["texto"]
