@@ -17,7 +17,10 @@
 #   HASH                  SHA-256 del PDF
 #
 #           La carpeta de TIFF de un libro puede llamarse como el código o con
-#           " OK" al final (como llegan a INPUT).
+#           " OK" al final (como llegan a INPUT). Libros fragmentados: el PDF de
+#           un fragmento se busca también como subcarpeta de un libro
+#           (<carpeta TIFF>/<libro>/<fragmento>), y el PDF único de un libro
+#           fragmentado cuenta las TIFF de todas sus subcarpetas.
 #
 #           Registro del día: main.sh agrega cada PDF que entrega (en OUTPUT o en
 #           OUTPUT/SIN METADATOS) a REGISTRO/registro OCR-ICR <d> <Mes> <aaaa>.csv
@@ -60,27 +63,56 @@ def libros_pdf(pdf_dir):
     return sorted(p for p in carpeta.iterdir() if p.is_file() and p.suffix.lower() == ".pdf")
 
 
-def carpeta_tiff(tiff_dir, codigo):
-    """Carpeta de TIFF del libro, o None si no está."""
-    base = Path(tiff_dir)
+def _buscar_en(base, codigo):
     for nombre in (codigo, f"{codigo} OK"):
         if (base / nombre).is_dir():
             return base / nombre
-    if base.is_dir():
-        buscado = codigo.upper()
-        for p in base.iterdir():
-            if p.is_dir() and p.name.upper().removesuffix(" OK") == buscado:
-                return p
+    buscado = codigo.upper()
+    for p in base.iterdir():
+        if p.is_dir() and p.name.upper().removesuffix(" OK") == buscado:
+            return p
     return None
 
 
-def datos_tiff(carpeta):
-    """(número de TIFF, bytes) de la carpeta del libro."""
+def carpeta_tiff(tiff_dir, codigo):
+    """Carpeta de TIFF del libro (o del fragmento, un nivel más abajo), o None si no está."""
+    base = Path(tiff_dir)
+    if not base.is_dir():
+        return None
+    encontrada = _buscar_en(base, codigo)
+    if encontrada:
+        return encontrada
+    for libro in sorted(p for p in base.iterdir() if p.is_dir()):   # fragmento: <libro>/<fragmento>
+        try:
+            encontrada = _buscar_en(libro, codigo)
+        except OSError:
+            continue
+        if encontrada:
+            return encontrada
+    return None
+
+
+def _tiffs_de(carpeta):
     n, total = 0, 0
     for p in carpeta.iterdir():
-        if p.is_file() and p.suffix.lower() in EXT_TIFF:
+        if p.is_file() and p.suffix.lower() in EXT_TIFF and not p.name.startswith("_"):
             n += 1
             total += p.stat().st_size
+    return n, total
+
+
+def datos_tiff(*carpetas):
+    """(número de TIFF, bytes) de una o varias carpetas. Una carpeta sin TIFF sueltas
+    pero con subcarpetas (libro fragmentado) cuenta las de sus subcarpetas."""
+    n, total = 0, 0
+    for carpeta in carpetas:
+        carpeta = Path(carpeta)
+        a, b = _tiffs_de(carpeta)
+        if a == 0:
+            for sub in sorted(p for p in carpeta.iterdir() if p.is_dir() and not p.name.startswith(("_", "."))):
+                c, d = _tiffs_de(sub)
+                a, b = a + c, b + d
+        n, total = n + a, total + b
     return n, total
 
 
@@ -199,12 +231,13 @@ def main_agregar(argv):
     p = argparse.ArgumentParser(description="Agrega un PDF al registro OCR-ICR del día")
     p.add_argument("--registro-dir", required=True)
     p.add_argument("--pdf", required=True)
-    p.add_argument("--tiff-dir", required=True, help="Carpeta de TIFF del libro")
+    p.add_argument("--tiff-dir", required=True, action="append",
+                   help="Carpeta de TIFF del PDF (repetible: un PDF con varias partes)")
     p.add_argument("--entrega", type=int, choices=list(ENTREGAS))
     p.add_argument("--hash", help="SHA-256 del PDF, si ya se calculó")
     a = p.parse_args(argv)
     pdf = Path(a.pdf)
-    n, peso_tiff = datos_tiff(Path(a.tiff_dir))
+    n, peso_tiff = datos_tiff(*a.tiff_dir)
     nueva = fila(pdf.stem, n, pdf.stat().st_size, peso_tiff, a.entrega, a.hash or sha256(pdf))
     print(agregar(a.registro_dir, nueva))
 

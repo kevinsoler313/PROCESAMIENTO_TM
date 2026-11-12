@@ -5,7 +5,9 @@
 # DESC:     Cada campo del PDF (Title, Subject, Author…) se arma con una
 #           plantilla: texto libre con columnas del CSV, escritas {1}, {2}…
 #           Ej.: "Congreso de la República - {3}". Una plantilla vacía deja el
-#           campo sin escribir. También se elige qué columna es el código del
+#           campo sin escribir. {nombre} es el nombre del PDF tal cual: el
+#           código del libro o, en un libro fragmentado con un PDF por
+#           fragmento, el nombre de la subcarpeta (sin " OK"). También se elige qué columna es el código del
 #           libro y si la primera fila es encabezado.
 #
 #           Sin --config se usa PREDETERMINADA, que reproduce los metadatos de
@@ -18,7 +20,8 @@
 #     → una línea por código: código y los valores de CAMPOS, separados por
 #       el carácter 0x1F (lo lee metadatos.sh)
 #
-#   python3 metadatos.py escribir --pdf libro.pdf   (línea del índice en META_LINEA)
+#   python3 metadatos.py escribir --pdf libro.pdf   (línea del índice en META_LINEA,
+#                                                     nombre del PDF en META_NOMBRE)
 #     → escribe los campos en el PDF con pikepdf, sincronizando el diccionario
 #       Info y el XMP como exige PDF/A (exiftool los dejaba distintos y el PDF
 #       dejaba de ser PDF/A-3B válido). Asunto y Descripción comparten el mismo
@@ -35,6 +38,7 @@ import csv
 import json
 import re
 import sys
+from pathlib import Path
 
 # Campos del PDF, en el orden en que viajan a metadatos.sh: (etiqueta exiftool, nombre)
 CAMPOS = [
@@ -170,6 +174,14 @@ def revisar(filas, cfg):
     return codigos, len(vistos), avisos
 
 
+NOMBRE = "{nombre}"
+
+
+def con_nombre(valor, nombre):
+    """{nombre} → nombre del PDF (libro o fragmento), tal cual."""
+    return valor.replace(NOMBRE, nombre)
+
+
 def escribir(ruta_pdf, valores):
     """Escribe los campos no vacíos en el PDF, con Info y XMP iguales (PDF/A 6.6.2.3).
     Correspondencias de PDF/A: Title↔dc:title, Author↔dc:creator, Subject↔dc:description,
@@ -211,7 +223,9 @@ def main():
         if not a.pdf:
             p.error("escribir requiere --pdf")
         partes = os.environ.get("META_LINEA", "").split(SEPARADOR)
-        valores = {campo: (partes[i + 1] if i + 1 < len(partes) else "") for i, (campo, _) in enumerate(CAMPOS)}
+        nombre = os.environ.get("META_NOMBRE") or Path(a.pdf).stem
+        valores = {campo: con_nombre(partes[i + 1] if i + 1 < len(partes) else "", nombre)
+                   for i, (campo, _) in enumerate(CAMPOS)}
         escribir(a.pdf, valores)
         return 0
     if not a.csv:

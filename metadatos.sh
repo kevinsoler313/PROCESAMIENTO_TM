@@ -51,6 +51,7 @@ meta_escribir() {
     # Con pikepdf (metadatos.py escribir), no con exiftool: exiftool deja el
     # diccionario Info y el XMP distintos y el PDF deja de ser PDF/A-3B válido.
     # La línea va por variable de entorno: ningún valor del CSV se mete en código.
+    # $1 = nombre del PDF (libro o fragmento): reemplaza {nombre} en las plantillas.
     local pdf="$2" meta="$3"
-    META_LINEA="$meta" python3 "$META_PY" escribir --pdf "$pdf"
+    META_LINEA="$meta" META_NOMBRE="$1" python3 "$META_PY" escribir --pdf "$pdf"
 }

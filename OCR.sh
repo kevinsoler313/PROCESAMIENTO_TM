@@ -28,6 +28,12 @@ IFS=$'\n\t'
 # Libros procesados en esta ejecución (para reportar solo los relevantes)
 declare -a PROCESSED_BOOKS=()
 
+# --orden <archivo>: nombres de las TIFF en el orden del PDF, uno por línea (lo
+# escribe libros.py). Con él, el orden se decide UNA sola vez: las páginas se
+# leen y se unen siguiendo ese archivo, nunca volviendo a ordenar nombres.
+# Vacío = orden natural de los nombres (sort -V), como antes.
+ORDEN_FILE=""
+
 # Subir límite de archivos abiertos (necesario para pdfunite con libros grandes)
 ulimit -n 65536 2>/dev/null || ulimit -n 8192 2>/dev/null || true
 
@@ -582,7 +588,18 @@ consolidate_book() {
         # sort -V (orden natural): los nombres no llevan ceros a la izquierda
         # ("Hoja 2" < "Hoja 10"). Con 'sort' lexicográfico el PDF se armaría
         # desordenado: Hoja 1, Hoja 10, Hoja 100, Hoja 11...
-        while IFS= read -r pdf_page; do
+        local -a candidatos=()
+        if [[ -n "$ORDEN_FILE" ]]; then
+            # Mismo orden que se usó para leer las TIFF (archivo de libros.py)
+            local nombre_tiff
+            while IFS= read -r nombre_tiff; do
+                [[ -n "$nombre_tiff" ]] && candidatos+=("${tess_dir}/${nombre_tiff%.*}.pdf")
+            done < "$ORDEN_FILE"
+        else
+            while IFS= read -r pdf_page; do candidatos+=("$pdf_page"); done \
+                < <(find "$tess_dir" -name "*.pdf" | sort -V)
+        fi
+        for pdf_page in "${candidatos[@]}"; do
             # Validar con pdfinfo (detecta stubs de 2KB dejados por OOM kills)
             if ! pdfinfo "$pdf_page" &>/dev/null; then
                 local fsize
@@ -594,7 +611,7 @@ consolidate_book() {
             else
                 page_pdfs+=("$pdf_page")
             fi
-        done < <(find "$tess_dir" -name "*.pdf" | sort -V)
+        done
 
         if [[ $skipped_corrupt -gt 0 ]]; then
             log_warn "[${book_name}] Se ignoraron $skipped_corrupt PDF(s) corruptos. Re-ejecuta el pipeline para completar esas páginas."
@@ -764,9 +781,16 @@ run_pipeline() {
 
         # Buscar TIFF dentro de la carpeta del libro
         local tiff_list=()
-        while IFS= read -r f; do
-            tiff_list+=("$f")
-        done < <(find "$book_dir" -maxdepth 1 \( -iname "*.tif" -o -iname "*.tiff" \) -not -name '_*' | sort -V)
+        if [[ -n "$ORDEN_FILE" ]]; then
+            local nombre_tiff
+            while IFS= read -r nombre_tiff; do
+                [[ -n "$nombre_tiff" ]] && tiff_list+=("${book_dir}/${nombre_tiff}")
+            done < "$ORDEN_FILE"
+        else
+            while IFS= read -r f; do
+                tiff_list+=("$f")
+            done < <(find "$book_dir" -maxdepth 1 \( -iname "*.tif" -o -iname "*.tiff" \) -not -name '_*' | sort -V)
+        fi
 
         if [[ ${#tiff_list[@]} -eq 0 ]]; then
             log_warn "Sin imágenes TIFF en: $book_dir — omitiendo libro."
@@ -1024,6 +1048,7 @@ parse_args() {
                 (( PARALLEL_JOBS_LARGE > PARALLEL_JOBS_CPU )) && PARALLEL_JOBS_LARGE="$PARALLEL_JOBS_CPU"
                 shift 2 ;;
             -g) PARALLEL_JOBS_GPU="$2"; shift 2 ;;
+            --orden) ORDEN_FILE="$2"; shift 2 ;;
             --no-tesseract) USE_TESSERACT=0; shift ;;
             --no-paddle)    USE_PADDLEOCR=0; shift ;;
             --no-kraken)    USE_KRAKEN=0;    shift ;;

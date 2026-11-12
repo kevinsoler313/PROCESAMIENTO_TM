@@ -24,6 +24,58 @@ INPUT/<libro>/*.tif
           está en el CSV), lo registra y recién entonces borra los TIFF
 ```
 
+## Libros fragmentados (subcarpetas)
+
+Algunas sedes entregan el libro partido en subcarpetas, con las TIFF un nivel
+más abajo:
+
+```
+K-1394/
+├── ps21_gacetadecund_bog_nov_2013 OK/   …-0000.tif … -0238.tif
+└── ps21_gacetadecund_bog_dic_2013 OK/   …-0000.tif … -0450.tif
+```
+
+En PROCESAR se marca **Libros fragmentados en subcarpetas** y aparece la
+segunda opción:
+
+- **Un solo PDF por libro:** todas las partes, en orden, en `K-1394.pdf`.
+- **Un PDF por cada fragmento:** un PDF por subcarpeta, con su nombre tal cual
+  (sin « OK»): `ps21_gacetadecund_bog_nov_2013.pdf`. Cada uno cuenta como un
+  libro: su fila en los registros, en el registro OCR-ICR y en GDOC.
+
+Sin la casilla, un libro con subcarpetas no se puede seleccionar en la
+interfaz (desde la terminal va a REVIEW). `--fragmentados unico|fragmentos` en
+`main.sh`.
+
+**Orden** (`libros.py`). Se decide una sola vez, antes del OCR, y la unión de
+páginas lo sigue; procesar en paralelo no lo cambia. En la lista de libros se
+ve el orden detectado (y el detalle al pasar el mouse).
+
+1. Partes con mes y año en el nombre (`nov_2013`, `dic 2013`, `2013-nov`):
+   por fecha. Por nombre quedaría `dic` antes que `nov`.
+2. Partes que solo difieren en un número (`01`, `02`, `10`; `Tomo 1`,
+   `Tomo 2`): por ese número.
+3. Cualquier otra cosa no se adivina y el libro no se procesa: mes sin año
+   (`jul`, `ago`: no se sabe si enero va antes o después de diciembre),
+   mezclas, dos partes con la misma fecha, nombres sin fecha ni número.
+
+Dentro de cada parte, las TIFF van en orden natural por nombre (`Hoja 2` antes
+que `Hoja 10`). Da igual si cada parte vuelve a empezar en `0000` o sigue el
+consecutivo de la anterior.
+
+**Páginas faltantes.** Si los nombres terminan en número, no puede faltar ni
+repetirse ninguno, y cada parte debe empezar en 0000/0001 o en el número
+siguiente al de la parte anterior. Si no, el libro va a REVIEW con el número
+que falta: el conteo PDF = TIFF no lo detectaría.
+
+**Todo o nada.** Si una parte falla (DPI, páginas sin OCR, conteo), el libro
+entero va a REVIEW y ningún PDF suyo llega a OUTPUT. Los TIFF se borran solo
+cuando todos sus PDF están en OUTPUT y registrados.
+
+**Metadatos.** El PDF de un fragmento busca su nombre en el CSV y, si no está,
+usa la fila del libro. En las plantillas de METADATOS, `{nombre}` es el nombre
+del PDF tal cual (el del fragmento o el del libro); p. ej., Título = `{nombre}`.
+
 ## Carpetas de datos
 
 Cada equipo las tiene donde quiera y las elige en la interfaz. `/mnt/datos` es

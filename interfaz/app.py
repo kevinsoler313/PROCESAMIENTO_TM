@@ -27,9 +27,9 @@ from PySide6.QtCore import (QBuffer, QByteArray, QIODevice, QObject, QSettings, 
 from PySide6.QtGui import QColor, QDesktopServices, QFont, QFontDatabase, QIcon, QPalette, QPixmap
 from PySide6.QtPdf import QPdfDocument
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QMenu, QFileDialog, QFrame, QGridLayout, QHBoxLayout,
+    QApplication, QButtonGroup, QCheckBox, QComboBox, QMenu, QFileDialog, QFrame, QGridLayout, QHBoxLayout,
     QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit,
-    QProgressBar, QPushButton, QScrollArea, QSlider, QSpinBox, QStackedWidget, QTabWidget, QTableWidget,
+    QProgressBar, QPushButton, QRadioButton, QScrollArea, QSlider, QSpinBox, QStackedWidget, QTabWidget, QTableWidget,
     QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -57,6 +57,7 @@ import marca_agua as MA  # noqa: E402
 import contenedores_gdoc as CG  # noqa: E402
 import metadatos as MD  # noqa: E402
 import registro_ocr_icr as RO  # noqa: E402
+import libros as LB  # noqa: E402
 import actualizacion as ACT  # noqa: E402
 
 VERSION = ACT.version_local()
@@ -356,6 +357,12 @@ QCheckBox::indicator:hover, QTableWidget::indicator:hover {{ border-color: {t['a
 QCheckBox::indicator:checked, QTableWidget::indicator:checked {{ background: {t['rojo']}; border-color: {t['rojo']};
     image: url({CHECK}); }}
 QCheckBox::indicator:disabled, QTableWidget::indicator:disabled {{ background: {t['card']}; border-color: {t['borde']}; }}
+/* Opciones (una de varias): mismo aro que las casillas, redondo; la elegida, en rojo */
+QRadioButton {{ spacing: 8px; color: {t['texto']}; }}
+QRadioButton::indicator {{ width: 14px; height: 14px; border-radius: 8px;
+    border: 1px solid {t['borde_fuerte']}; background: {t['fondo']}; }}
+QRadioButton::indicator:hover {{ border-color: {t['acento']}; }}
+QRadioButton::indicator:checked {{ border: 4px solid {t['rojo']}; background: {t['titulo']}; width: 8px; height: 8px; }}
 
 /* Barras de avance y deslizador */
 QProgressBar {{ border: none; background: {t['borde']}; border-radius: 3px; }}
@@ -543,7 +550,8 @@ class PanelMetadatos(QObject):
         fila.addWidget(b)
         self.widgets += [self.encabezado, self.codigo, b]
         nota = QLabel("Cada campo es texto libre con columnas del CSV: «+ Columna» agrega {N} donde está "
-                      "el cursor. Ej.: Congreso de la República - {3}. Un campo vacío no se escribe en el "
+                      "el cursor. Ej.: Congreso de la República - {3}. {nombre} es el nombre del PDF tal "
+                      "cual (el del fragmento, si se saca un PDF por fragmento). Un campo vacío no se escribe en el "
                       "PDF. En PDF/A, Asunto y Descripción ocupan el mismo lugar: si Asunto tiene texto, "
                       "Descripción no se escribe.", objectName="sub")
         nota.setWordWrap(True)
@@ -698,7 +706,7 @@ class PanelMetadatos(QObject):
                 etiqueta.setText("")
                 continue
             fuera = [n for n in MD.COLUMNA.findall(plantilla) if int(n) > MD.num_columnas(self.filas)]
-            etiqueta.setText(f"Ej. {codigo}: {MD.armar(plantilla, fila)}"
+            etiqueta.setText(f"Ej. {codigo}: {MD.con_nombre(MD.armar(plantilla, fila), codigo)}"
                              + (f"   ⚠ el CSV no tiene la columna {{{fuera[0]}}}" if fuera else ""))
 
     def _menu_columnas(self, linea, boton):
@@ -709,6 +717,9 @@ class PanelMetadatos(QObject):
         for n, nombre, ejemplo in columnas:
             accion = menu.addAction(f"{{{n}}} · {nombre}" + (f"  — {ejemplo[:40]}" if ejemplo else ""))
             accion.triggered.connect(lambda _=False, n=n: (linea.insert(f"{{{n}}}"), linea.setFocus()))
+        menu.addSeparator()
+        accion = menu.addAction(f"{MD.NOMBRE} · Nombre del PDF tal cual (código del libro o del fragmento)")
+        accion.triggered.connect(lambda _=False: (linea.insert(MD.NOMBRE), linea.setFocus()))
         menu.exec(boton.mapToGlobal(boton.rect().bottomLeft()))
 
     def _encabezado_cambiado(self, valor):
@@ -783,17 +794,28 @@ class Escaner(QObject):
             for d in sorted(input_dir.iterdir()):
                 if not d.is_dir():
                     continue
-                paginas, peso = 0, 0
+                paginas, peso, subs = 0, 0, []
                 try:
                     for e in os.scandir(d):
                         if e.is_file():
                             peso += e.stat().st_size
                             if es_tiff(e.name):
                                 paginas += 1
+                        elif e.is_dir() and not e.name.startswith(("_", ".")):
+                            subs.append(e.path)
+                    for sub in subs:               # libro fragmentado: LIBRO/<parte>/*.tif
+                        for e in os.scandir(sub):
+                            if e.is_file():
+                                peso += e.stat().st_size
+                                if es_tiff(e.name):
+                                    paginas += 1
                 except OSError:
                     pass
+                # Partes en el orden en que se unirán (o el motivo por el que no se puede)
+                fragmentos, frag_error = LB.resumen(d) if subs else ([], None)
                 libros.append({"carpeta": d.name, "libro": nombre_libro(d.name),
-                               "paginas": paginas, "peso": peso})
+                               "paginas": paginas, "peso": peso,
+                               "fragmentos": fragmentos, "frag_error": frag_error})
         self.listo.emit(libros)
 
 
@@ -2223,6 +2245,35 @@ class Ventana(QMainWindow):
         self.tabla.itemChanged.connect(self._actualizar_titulo_libros)
         lay.addWidget(self.tabla)
 
+        # Libros que vienen en subcarpetas (LIBRO/<parte>/*.tif). La segunda opción
+        # solo aparece con la primera marcada.
+        frag = QHBoxLayout()
+        self.fragmentados = QCheckBox("Libros fragmentados en subcarpetas")
+        self.fragmentados.setToolTip(
+            "Libros cuya carpeta trae subcarpetas con las TIFF (p. ej. una por mes).\n"
+            "Las partes se ordenan por mes y año, o por número; si no se puede, el libro no se procesa.\n"
+            "Sin marcar, esos libros no se pueden seleccionar.")
+        frag.addWidget(self.fragmentados)
+        frag.addSpacing(16)
+        self.frag_unico = QRadioButton("Un solo PDF por libro")
+        self.frag_unico.setToolTip("Todas las partes, en orden, en un PDF con el nombre del libro")
+        self.frag_partes = QRadioButton("Un PDF por cada fragmento")
+        self.frag_partes.setToolTip("Un PDF por subcarpeta, con el nombre de la subcarpeta tal cual "
+                                    "(sin « OK»); cada uno cuenta como un libro en los registros")
+        self.grupo_frag = QButtonGroup(self)
+        self.grupo_frag.addButton(self.frag_unico)
+        self.grupo_frag.addButton(self.frag_partes)
+        frag.addWidget(self.frag_unico)
+        frag.addWidget(self.frag_partes)
+        frag.addStretch()
+        lay.addLayout(frag)
+        self.fragmentados.setChecked(self.ajustes.value("fragmentados", "false") == "true")
+        (self.frag_partes if self.ajustes.value("frag_modo", "unico") == "fragmentos"
+         else self.frag_unico).setChecked(True)
+        self._fragmentados_cambiado()
+        self.fragmentados.toggled.connect(self._fragmentados_cambiado)
+        self.grupo_frag.buttonToggled.connect(lambda *_: self._fragmentados_cambiado())
+
         abajo = QHBoxLayout()
         self.png = QCheckBox("Exportar también PNG de cada página")
         self.png.setToolTip("Opcional: guarda cada página como PNG (sin marca de agua) en la carpeta PNG.")
@@ -2517,6 +2568,27 @@ class Ventana(QMainWindow):
         self.logo_detalle.setText(f"{pix.width()} × {pix.height()} px")
         self.timer_preview.start()
 
+    def _modo_fragmentados(self):
+        """'' (no se aceptan) · 'unico' · 'fragmentos' — lo que recibe main.sh."""
+        if not self.fragmentados.isChecked():
+            return ""
+        return "fragmentos" if self.frag_partes.isChecked() else "unico"
+
+    def _fragmentados_cambiado(self, *_):
+        activo = self.fragmentados.isChecked()
+        self.frag_unico.setVisible(activo)
+        self.frag_partes.setVisible(activo)
+        self.ajustes.setValue("fragmentados", "true" if activo else "false")
+        self.ajustes.setValue("frag_modo", "fragmentos" if self.frag_partes.isChecked() else "unico")
+        if getattr(self, "libros", None):
+            self._mostrar_libros(self.libros)
+
+    def _pdfs_de(self, libro):
+        """Nombres de los PDF que saldrán del libro con la opción actual."""
+        if libro.get("fragmentos") and self._modo_fragmentados() == "fragmentos" and not libro.get("frag_error"):
+            return [n for n, _ in libro["fragmentos"]]
+        return [libro["libro"]]
+
     def refrescar_libros(self):
         self.libros_titulo.setText("Libros en INPUT (leyendo…)")
         self.escaner.escanear(self.carpetas["input"])
@@ -2524,27 +2596,48 @@ class Ventana(QMainWindow):
     def _mostrar_libros(self, libros):
         previos = self._seleccionados() if self.tabla.rowCount() else None
         self.libros = libros
+        if not hasattr(self, "_no_elegibles"):
+            self._no_elegibles = set()
+        bloqueados_ahora = {l["libro"] for l in libros}
         self.tabla.blockSignals(True)
         self.tabla.setRowCount(0)
         for libro in libros:
             fila = self.tabla.rowCount()
             self.tabla.insertRow(fila)
             nombre = libro["libro"]
+            fragmentado = bool(libro.get("fragmentos"))
+            frag_error = libro.get("frag_error")
             bloqueado = (self.carpetas["temp"] / nombre).exists()
-            ya_hecho = (self.carpetas["output"] / f"{nombre}.pdf").exists() or \
-                (self.carpetas["output"] / SIN_META_SUBDIR / f"{nombre}.pdf").exists()
+            ya_hecho = all((self.carpetas["output"] / f"{n}.pdf").exists() or
+                           (self.carpetas["output"] / SIN_META_SUBDIR / f"{n}.pdf").exists()
+                           for n in self._pdfs_de(libro))
+            # Fragmentado sin la casilla, o sin un orden seguro: no se deja seleccionar
+            # (iría a REVIEW); la columna Estado dice por qué
+            no_procesable = fragmentado and (not self.fragmentados.isChecked() or frag_error)
 
             chk = QTableWidgetItem()
-            if bloqueado or ya_hecho:
+            if bloqueado or ya_hecho or no_procesable:
                 chk.setFlags(Qt.ItemIsEnabled)
                 chk.setCheckState(Qt.Unchecked)
             else:
                 chk.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)
-                marcado = previos is None or nombre in previos
+                # Un libro que antes no se podía elegir (p. ej. fragmentado sin la
+                # casilla) queda marcado al volverse procesable
+                marcado = previos is None or nombre in previos or nombre in self._no_elegibles
+                bloqueados_ahora.discard(nombre)
                 chk.setCheckState(Qt.Checked if marcado else Qt.Unchecked)
             chk.setData(Qt.UserRole, nombre)
             self.tabla.setItem(fila, 0, chk)
-            self.tabla.setItem(fila, 1, QTableWidgetItem(libro["carpeta"]))
+            celda_libro = QTableWidgetItem(libro["carpeta"])
+            if fragmentado:
+                partes = libro["fragmentos"]
+                celda_libro.setText(f'{libro["carpeta"]}  ·  {len(partes)} partes'
+                                    + (" (sin orden válido): " + ", ".join(n for n, _ in partes) if frag_error
+                                       else ": " + " → ".join(n for n, _ in partes)))
+                orden = "\n".join(f"{i}. {n}  ({c} TIFF)" for i, (n, c) in enumerate(partes, 1))
+                celda_libro.setToolTip(("No se puede procesar:\n" + frag_error + "\n\nSubcarpetas:\n" + orden)
+                                       if frag_error else "Se unirán en este orden:\n" + orden)
+            self.tabla.setItem(fila, 1, celda_libro)
             pag = QTableWidgetItem(str(libro["paginas"]))
             pag.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             self.tabla.setItem(fila, 2, pag)
@@ -2558,9 +2651,14 @@ class Ventana(QMainWindow):
                 estado = pill("Ya está en OUTPUT", "gris")
             elif libro["paginas"] == 0:
                 estado = pill("Sin TIFF", "error")
+            elif fragmentado and frag_error:
+                estado = pill("Fragmentos: revisar", "error")
+                estado.setToolTip(frag_error)
+            elif fragmentado and not self.fragmentados.isChecked():
+                estado = pill("Fragmentado: marca la casilla", "warn")
             elif self.meta.codigos is None:
                 estado = pill("Elige el CSV", "gris")
-            elif nombre in self.meta.codigos:
+            elif nombre in self.meta.codigos or all(n in self.meta.codigos for n in self._pdfs_de(libro)):
                 estado = pill("En CSV", "ok")
             else:
                 estado = pill("Sin metadatos", "warn")
@@ -2571,6 +2669,7 @@ class Ventana(QMainWindow):
             hc.addStretch()
             self.tabla.setCellWidget(fila, 4, celda)
         self.tabla.blockSignals(False)
+        self._no_elegibles = bloqueados_ahora
         self._filtrar_libros()     # la búsqueda se mantiene al actualizar la lista
 
     def _seleccionados(self):
@@ -2648,9 +2747,16 @@ class Ventana(QMainWindow):
         self.aviso.setText("")
 
         paginas = sum(l["paginas"] for l in self.libros if l["libro"] in seleccion)
+        n_frag = sum(1 for l in self.libros if l["libro"] in seleccion and l.get("fragmentos"))
+        texto_frag = ""
+        if n_frag:
+            texto_frag = (f"{n_frag} libro(s) fragmentado(s): "
+                          + ("un PDF por cada fragmento" if self._modo_fragmentados() == "fragmentos"
+                             else "un solo PDF por libro") + ".\n\n")
         r = QMessageBox.question(
             self, "Iniciar procesamiento",
             f"Se procesarán {len(seleccion)} libro(s), {paginas:,} páginas.\n\n".replace(",", ".")
+            + texto_frag
             + f"Los PDF finales quedarán en:\n{self.carpetas['output']}\n\n"
             + "Al terminar cada libro, sus TIFF se borran de INPUT.\n¿Continuar?")
         if r != QMessageBox.Yes:
@@ -2666,6 +2772,8 @@ class Ventana(QMainWindow):
         if self.png.isChecked():
             args.append("--png")
         args += ["--entrega", str(self.entrega_proc.currentData())]
+        if self._modo_fragmentados():
+            args += ["--fragmentados", self._modo_fragmentados()]
         self.ajustes.setValue("texto_marca", self.texto_marca.currentText())
         args += ["--texto-marca",
                  self.texto_marca.currentText() if self.marca_activa["texto"].isChecked() else ""]
@@ -2820,10 +2928,19 @@ class Ventana(QMainWindow):
             if a.get("paso") != 2:
                 continue
             total = self.paginas.get(libro) or 0
+            # Libro normal: TEMPORALES/<libro>/tesseract · fragmentado: …/ocr/<parte>/tesseract
+            base = self.carpetas["temp"] / libro
+            carpetas_ocr = [base / "tesseract"]
             try:
-                hechas = sum(1 for e in os.scandir(self.carpetas["temp"] / libro / "tesseract") if e.name.endswith(".txt"))
+                carpetas_ocr += [Path(e.path) / "tesseract" for e in os.scandir(base / "ocr") if e.is_dir()]
             except OSError:
-                hechas = 0
+                pass
+            hechas = 0
+            for c in carpetas_ocr:
+                try:
+                    hechas += sum(1 for e in os.scandir(c) if e.name.endswith(".txt"))
+                except OSError:
+                    pass
             if total:
                 pct = int(70 * min(hechas, total) / total)
                 a["barra"].setValue(pct)

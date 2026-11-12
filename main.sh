@@ -61,6 +61,10 @@ source "${SCRIPT_DIR}/metadatos.sh" || { echo "Falta ${SCRIPT_DIR}/metadatos.sh"
 # Registro CSV principal (solo libros exitosos)
 REGISTRO_CSV="${REGISTRO_DIR}/registro_libros_procesados.csv"
 REGISTRO_OCR_ICR="${SCRIPT_DIR}/registro_ocr_icr.py"
+# Libros fragmentados en subcarpetas (--fragmentados): vacío = no se aceptan (van
+# a REVIEW) · unico = un PDF con todo el libro · fragmentos = un PDF por subcarpeta
+LIBROS_PY="${SCRIPT_DIR}/libros.py"
+FRAGMENTADOS=""
 # Entrega a la que pertenecen los libros de esta ejecución (--entrega 1-30); va en
 # el registro OCR-ICR del día. Vacío = la columna ENTREGA queda en blanco.
 ENTREGA=""
@@ -171,7 +175,7 @@ log_step()  { _log STEP  "$@"; }
 # reprocese desde cero. Si los TIFF ya se borraron, no se toca nada.
 release_book() {
     local book_name="$1"
-    if find "${INPUT_DIR}/${book_name}" -maxdepth 1 \( -iname "*.tif" -o -iname "*.tiff" \) -print -quit 2>/dev/null | grep -q .; then
+    if find "${INPUT_DIR}/${book_name}" -maxdepth 2 \( -iname "*.tif" -o -iname "*.tiff" \) -print -quit 2>/dev/null | grep -q .; then
         rm -rf "${TEMP_DIR}/${book_name}" 2>/dev/null || true
         log_warn "[${book_name}] ⚡ Interrumpido. Temporales y candado eliminados; sigue en INPUT y se reprocesará en la próxima ejecución."
     else
@@ -273,6 +277,7 @@ check_deps() {
     [[ -f "$RUN_OCR"               ]] || { log_error "Falta: $RUN_OCR";        missing=$((missing+1)); }
     [[ -f "$MARCA_AGUA"            ]] || { log_error "Falta: $MARCA_AGUA";     missing=$((missing+1)); }
     [[ -f "$META_PY"               ]] || { log_error "Falta: $META_PY";        missing=$((missing+1)); }
+    [[ -f "$LIBROS_PY"             ]] || { log_error "Falta: $LIBROS_PY";      missing=$((missing+1)); }
     if [[ -n "$META_CONFIG" && ! -f "$META_CONFIG" ]]; then
         log_error "Falta configuración de metadatos: $META_CONFIG"; missing=$((missing+1))
     fi
@@ -389,24 +394,66 @@ with pikepdf.open(path, allow_overwriting_input=True) as pdf:
 " 2>>"${LOG_DIR}/ocrmypdf_${TIMESTAMP}.log"
 }
 
+# ─────────────────────────────────────────────────────────────────────────────
+# PLAN DEL LIBRO (libros.py): qué PDF salen y con qué carpetas de TIFF
+# TEMPORALES/<libro>/_plan.tsv, una línea por carpeta de TIFF, en orden:
+#   nombre_pdf <TAB> carpeta <TAB> archivo_de_orden <TAB> n_tiff
+# Libro normal: una línea (el PDF se llama como el libro, carpeta = INPUT/<libro>).
+# Fragmentado: una línea por subcarpeta; con «un solo PDF» todas comparten el
+# nombre del libro, con «un PDF por fragmento» cada una lleva el suyo.
+# ─────────────────────────────────────────────────────────────────────────────
+
+plan_file() { printf '%s' "${TEMP_DIR}/$1/_plan.tsv"; }
+
+# PDF del libro, en orden y sin repetir
+plan_pdfs() { awk -F'\t' '!visto[$1]++ { print $1 }' "$(plan_file "$1")"; }
+
+# Carpetas de TIFF de un PDF, en orden
+plan_carpetas() { awk -F'\t' -v u="$2" '$1 == u { print $2 }' "$(plan_file "$1")"; }
+
+# Carpeta de trabajo de un PDF: TEMPORALES/<libro> si se llama como el libro,
+# TEMPORALES/<libro>/pdf/<nombre> si es un fragmento con su propio PDF
+unidad_dir() {
+    if [[ "$1" == "$2" ]]; then
+        printf '%s' "${TEMP_DIR}/$1"
+    else
+        printf '%s' "${TEMP_DIR}/$1/pdf/$2"
+    fi
+}
+
+# Etiqueta del log: "[libro]" o "[libro] ‹fragmento›" (la interfaz busca "[libro]")
+etiqueta() {
+    if [[ "$1" == "$2" ]]; then
+        printf '[%s]' "$1"
+    else
+        printf '[%s] ‹%s›' "$1" "$2"
+    fi
+}
+
+# TIFF de una carpeta (sin archivos de control _*)
+contar_tiff() {
+    find "$1" -maxdepth 1 \( -iname "*.tif" -o -iname "*.tiff" \) -not -name '_*' 2>/dev/null | wc -l
+}
+
 step3_watermark() {
-    local book_name="$1"
-    local book_pdf="${TEMP_DIR}/${book_name}/${book_name}_ocr.pdf"
-    local out_pdf="${TEMP_DIR}/${book_name}/${book_name}_marca.pdf"
+    local book_name="$1" unidad="$2"
+    local dir t; dir=$(unidad_dir "$book_name" "$unidad"); t=$(etiqueta "$book_name" "$unidad")
+    local book_pdf="${dir}/${unidad}_ocr.pdf"
+    local out_pdf="${dir}/${unidad}_marca.pdf"
     local tmp_pdf="${out_pdf%.pdf}.tmp.pdf"
 
     if [[ ! -f "$book_pdf" ]]; then
-        log_warn "[${book_name}] PDF fuente no encontrado: ${book_pdf} — omitiendo marca de agua."
+        log_warn "${t} PDF fuente no encontrado: ${book_pdf} — omitiendo marca de agua."
         return 1
     fi
 
     if reuse_pdf "$out_pdf"; then
-        log_info "[${book_name}] Marca de agua ya existe y es válida, omitiendo."
+        log_info "${t} Marca de agua ya existe y es válida, omitiendo."
         echo "$out_pdf"
         return 0
     fi
 
-    log_info "[${book_name}] Aplicando marca de agua (optimizada)..."
+    log_info "${t} Aplicando marca de agua (optimizada)..."
 
     # Logo, texto al pie y marca diagonal: posición, transparencia y tamaño de cada
     # uno vienen de --marca-config (JSON); sin él, marca_agua.py usa sus valores
@@ -417,10 +464,10 @@ step3_watermark() {
     python3 "$MARCA_AGUA" "${marca_args[@]}" || rm -f "$tmp_pdf"
 
     if commit_pdf "$tmp_pdf" "$out_pdf"; then
-        log_ok "[${book_name}] Marca de agua aplicada → $(basename "$out_pdf")"
+        log_ok "${t} Marca de agua aplicada → $(basename "$out_pdf")"
         echo "$out_pdf"
     else
-        log_error "[${book_name}] Error al generar PDF con marca de agua."
+        log_error "${t} Error al generar PDF con marca de agua."
         return 1
     fi
 }
@@ -431,18 +478,18 @@ step3_watermark() {
 # ─────────────────────────────────────────────────────────────────────────────
 
 step4_pdfa() {
-    local book_name="$1"
-    local in_pdf="$2"         # PDF con marca de agua
-    local out_pdf="${TEMP_DIR}/${book_name}/${book_name}_final.pdf"
+    local book_name="$1" unidad="$2" in_pdf="$3"     # in_pdf: PDF con marca de agua
+    local dir t; dir=$(unidad_dir "$book_name" "$unidad"); t=$(etiqueta "$book_name" "$unidad")
+    local out_pdf="${dir}/${unidad}_final.pdf"
     local tmp_pdf="${out_pdf%.pdf}.tmp.pdf"
 
     if reuse_pdf "$out_pdf"; then
-        log_info "[${book_name}] PDF/A ya existe y es válido, omitiendo conversión."
+        log_info "${t} PDF/A ya existe y es válido, omitiendo conversión."
         echo "$out_pdf"
         return 0
     fi
 
-    log_info "[${book_name}] Convirtiendo a PDF/A-3b v1.7..."
+    log_info "${t} Convirtiendo a PDF/A-3b v1.7..."
 
     local avail_jobs=$(( $(nproc) - 1 ))
     [[ $avail_jobs -lt 1 ]] && avail_jobs=1
@@ -457,8 +504,8 @@ step4_pdfa() {
         2>>"${LOG_DIR}/ocrmypdf_${TIMESTAMP}.log" \
     && set_pdf_version_17 "$tmp_pdf" \
     && commit_pdf "$tmp_pdf" "$out_pdf" \
-    && log_ok "[${book_name}] PDF/A-3b generado → $(basename "$out_pdf")" \
-    || { rm -f "$tmp_pdf"; log_error "[${book_name}] Error en ocrmypdf. Ver: ${LOG_DIR}/ocrmypdf_${TIMESTAMP}.log"; return 1; }
+    && log_ok "${t} PDF/A-3b generado → $(basename "$out_pdf")" \
+    || { rm -f "$tmp_pdf"; log_error "${t} Error en ocrmypdf. Ver: ${LOG_DIR}/ocrmypdf_${TIMESTAMP}.log"; return 1; }
 
     echo "$out_pdf"
 }
@@ -468,47 +515,57 @@ step4_pdfa() {
 # ─────────────────────────────────────────────────────────────────────────────
 
 step5_metadata() {
-    local book_name="$1"
-    local pdf_path="$2"
+    local book_name="$1" unidad="$2" pdf_path="$3"
+    local dir t; dir=$(unidad_dir "$book_name" "$unidad"); t=$(etiqueta "$book_name" "$unidad")
 
-    # Metadatos por el código exacto de la carpeta (p. ej. AHFCP0001)
+    # Metadatos por el nombre exacto del PDF (p. ej. AHFCP0001). Un fragmento con
+    # su propio PDF que no está en el CSV toma la fila del libro.
     local meta
-    meta=$(meta_buscar "$book_name" "$TEMP_META")
+    meta=$(meta_buscar "$unidad" "$TEMP_META")
+    if [[ -z "$meta" && "$unidad" != "$book_name" ]]; then
+        meta=$(meta_buscar "$book_name" "$TEMP_META")
+    fi
 
     if [[ -z "$meta" ]]; then
-        log_warn "[${book_name}] ⚠ Sin metadatos en CSV — no se modificará el PDF (irá a OUTPUT/${SIN_META_SUBDIR})."
-        echo "$book_name" >> "$SIN_META_TXT"
-        BOOKS_NO_META+=("$book_name")
+        log_warn "${t} ⚠ Sin metadatos en CSV — no se modificará el PDF (irá a OUTPUT/${SIN_META_SUBDIR})."
+        echo "$unidad" >> "$SIN_META_TXT"
+        : > "${dir}/_sin_metadatos"
         return 0
     fi
 
-    log_info "[${book_name}] Insertando metadatos: Title=$(meta_titulo "$meta")"
-    meta_escribir "$book_name" "$pdf_path" "$meta"     && log_ok "[${book_name}] Metadatos insertados."     || log_warn "[${book_name}] Advertencia: no se pudieron escribir los metadatos (ver log)."
+    # {nombre} en una plantilla = nombre del PDF (código del libro o del fragmento)
+    local titulo; titulo=$(meta_titulo "$meta")
+    log_info "${t} Insertando metadatos: Title=${titulo//\{nombre\}/$unidad}"
+    meta_escribir "$unidad" "$pdf_path" "$meta" \
+        && log_ok "${t} Metadatos insertados." \
+        || log_warn "${t} Advertencia: no se pudieron escribir los metadatos (ver log)."
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PASO 6 · VERIFICACIÓN TIFF vs PÁGINAS PDF → limpiar intermedios
-# Los TIFF NO se borran aquí: solo al final de process_book, cuando el PDF ya
-# está en OUTPUT y registrado.
+# Los TIFF NO se borran aquí: solo al final de process_book, cuando TODOS los
+# PDF del libro ya están en OUTPUT y registrados.
 # ─────────────────────────────────────────────────────────────────────────────
 
 step6_verify_and_cleanup() {
-    local book_name="$1"
-    local final_pdf="$2"
-    local tiff_dir="${INPUT_DIR}/${book_name}"
+    local book_name="$1" unidad="$2" final_pdf="$3"
+    local dir t; dir=$(unidad_dir "$book_name" "$unidad"); t=$(etiqueta "$book_name" "$unidad")
 
-    # Contar TIFFs originales (excluyendo archivos de control _*)
-    local n_tiff
-    n_tiff=$(find "$tiff_dir" -maxdepth 1 \( -iname "*.tif" -o -iname "*.tiff" \) -not -name '_*' 2>/dev/null | wc -l)
+    # TIFF originales de las carpetas de este PDF (excluyendo archivos de control _*)
+    local -a carpetas; mapfile -t carpetas < <(plan_carpetas "$book_name" "$unidad")
+    local n_tiff=0 c
+    for c in "${carpetas[@]}"; do
+        n_tiff=$(( n_tiff + $(contar_tiff "$c") ))
+    done
 
     # Sin TIFF no hay contra qué comparar: el PDF no se puede dar por verificado
     if [[ $n_tiff -eq 0 ]]; then
-        log_error "[${book_name}] ❌ No hay TIFF en INPUT para verificar el PDF. Enviando libro a REVIEW."
+        log_error "${t} ❌ No hay TIFF en INPUT para verificar el PDF. Enviando libro a REVIEW."
         # El PDF podría ser la única copia: se guarda en REVIEW antes de limpiar TEMPORALES
-        local pdf_sin_verificar="${REVIEW_DIR}/${book_name}_${TIMESTAMP}_sin_verificar.pdf"
+        local pdf_sin_verificar="${REVIEW_DIR}/${unidad}_${TIMESTAMP}_sin_verificar.pdf"
         mv "$final_pdf" "$pdf_sin_verificar" 2>/dev/null \
-            && log_warn "[${book_name}] PDF sin verificar guardado en REVIEW/$(basename "$pdf_sin_verificar")"
-        quarantine_book "$book_name" "Sin TIFF en INPUT para verificar el PDF"
+            && log_warn "${t} PDF sin verificar guardado en REVIEW/$(basename "$pdf_sin_verificar")"
+        quarantine_book "$book_name" "Sin TIFF en INPUT para verificar el PDF ${unidad}"
         echo "REVIEW"
         return 0
     fi
@@ -518,48 +575,54 @@ step6_verify_and_cleanup() {
     n_pdf_pages=$(pdfinfo "$final_pdf" 2>/dev/null | grep -i '^Pages:' | awk '{print $2}')
     [[ -z "$n_pdf_pages" ]] && n_pdf_pages=0
 
-    log_info "[${book_name}] TIFFs totales: $n_tiff | Páginas PDF: $n_pdf_pages"
+    log_info "${t} TIFFs totales: $n_tiff | Páginas PDF: $n_pdf_pages"
 
     if [[ "$n_tiff" -eq "$n_pdf_pages" && "$n_tiff" -gt 0 ]]; then
         # ✅ ÉXITO ESTRICTO: conteo exacto TIFFs == páginas PDF
         local peso_tiff
-        peso_tiff=$(du -sb "$tiff_dir" 2>/dev/null | awk '{printf "%.3f", $1/1073741824}' | tr ',' '.')
-        log_ok "[${book_name}] ✅ Conteo EXACTO ($n_tiff TIFFs == $n_pdf_pages páginas)."
+        peso_tiff=$(du -sbc "${carpetas[@]}" 2>/dev/null | awk 'END {printf "%.3f", $1/1073741824}' | tr ',' '.')
+        log_ok "${t} ✅ Conteo EXACTO ($n_tiff TIFFs == $n_pdf_pages páginas)."
 
-        # Limpiar intermedios del OCR en TEMPORALES (queda solo <libro>_final.pdf)
+        # Limpiar intermedios en TEMPORALES (queda solo <nombre>_final.pdf)
+        log_info "${t} Limpiando archivos intermedios de OCR en TEMPORALES..."
         local book_tmp_dir="${TEMP_DIR}/${book_name}"
-        log_info "[${book_name}] Limpiando archivos intermedios de OCR en TEMPORALES..."
-        rm -rf "${book_tmp_dir}/tesseract" "${book_tmp_dir}/paddleocr" "${book_tmp_dir}/kraken" "${book_tmp_dir}/consolidado"
-        rm -f "${book_tmp_dir}/${book_name}_ocr.pdf" "${book_tmp_dir}/${book_name}_marca.pdf" 2>/dev/null || true
+        rm -rf "${book_tmp_dir}/tesseract" "${book_tmp_dir}/paddleocr" "${book_tmp_dir}/kraken" \
+               "${book_tmp_dir}/consolidado" "${book_tmp_dir}/ocr"
+        rm -f "${dir}/${unidad}_ocr.pdf" "${dir}/${unidad}_marca.pdf" 2>/dev/null || true
         # NO se elimina aquí TEMPORALES/<libro>: es el LOCK del libro.
-        # Se conserva hasta que el PDF final esté en OUTPUT con su nombre
+        # Se conserva hasta que los PDF finales estén en OUTPUT con su nombre
         # definitivo (ver final de process_book). Así se evita la ventana de
         # carrera que borró AR10622 cuando dos terminales procesaban el mismo libro.
 
-        log_ok "[${book_name}] Archivos intermedios eliminados."
+        log_ok "${t} Archivos intermedios eliminados."
         echo "${peso_tiff}"
     else
         # ❌ REGLA ESTRICTA: cualquier diferencia = libro inválido → REVIEW
         local n_diff=$(( n_tiff - n_pdf_pages ))
-        log_error "[${book_name}] ❌ INCONSISTENCIA ESTRICTA: $n_tiff TIFFs ≠ $n_pdf_pages páginas PDF (diferencia: ${n_diff} pág.)."
-        log_error "[${book_name}] Ninguna excepción permitida. Enviando libro a REVIEW."
+        log_error "${t} ❌ INCONSISTENCIA ESTRICTA: $n_tiff TIFFs ≠ $n_pdf_pages páginas PDF (diferencia: ${n_diff} pág.)."
+        log_error "${t} Ninguna excepción permitida. Enviando libro a REVIEW."
+        local de=""; [[ "$unidad" != "$book_name" ]] && de=" en ${unidad}"
         quarantine_book "$book_name" \
-            "Inconsistencia: ${n_tiff} TIFFs ≠ ${n_pdf_pages} páginas PDF (diferencia: ${n_diff} pág.)"
+            "Inconsistencia${de}: ${n_tiff} TIFFs ≠ ${n_pdf_pages} páginas PDF (diferencia: ${n_diff} pág.)"
         echo "REVIEW"
     fi
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PASO 7 · REGISTRO CSV DETALLADO (con metadatos, estado, timestamp)
+# Una fila por PDF entregado: un fragmento con su propio PDF es una fila más,
+# como un libro común.
 # ─────────────────────────────────────────────────────────────────────────────
 
 step7_register() {
-    local book_name="$1"
+    local book_name="$1"      # nombre del PDF (libro o fragmento)
     local final_pdf="$2"
     local n_pages="$3"
     local peso_carpeta_gb="$4"
     local status="$5"         # OK | SIN_META | ERROR
     local error_detail="$6"   # Detalle del error (si aplica)
+    shift 6
+    local -a carpetas_tiff=("$@")   # carpetas de TIFF de este PDF (para el registro OCR-ICR)
 
     # Peso del PDF final en MB con decimales en punto
     local peso_pdf_mb="0.00"
@@ -585,8 +648,10 @@ step7_register() {
             > "$REGISTRO_CSV"
     fi
 
-    # Eliminar entrada previa del mismo libro (si se re-procesa)
-    sed -i "/^${book_name}|/d" "$REGISTRO_CSV" 2>/dev/null || true
+    # Eliminar entrada previa del mismo PDF (si se re-procesa). Con awk y no sed:
+    # un nombre con puntos o paréntesis no se interpreta como expresión regular.
+    awk -F'|' -v c="$book_name" '$1 != c' "$REGISTRO_CSV" > "${REGISTRO_CSV}.tmp.$$" \
+        && mv "${REGISTRO_CSV}.tmp.$$" "$REGISTRO_CSV"
 
     printf '%s|%s|%s|%s|%s|%s|%s|%s\n' \
         "$book_name" "$n_pages" "$peso_carpeta_gb" "$peso_pdf_mb" \
@@ -597,8 +662,9 @@ step7_register() {
 
     # Registro OCR-ICR del día (REGISTRO/registro OCR-ICR <d> <Mes> <aaaa>.csv): todo
     # PDF entregado, con o sin metadatos. Los TIFF todavía están en INPUT.
-    local -a ro_args=(agregar --registro-dir "$REGISTRO_DIR" --pdf "$final_pdf"
-                      --tiff-dir "${INPUT_DIR}/${book_name}" --hash "$sha256")
+    local -a ro_args=(agregar --registro-dir "$REGISTRO_DIR" --pdf "$final_pdf" --hash "$sha256")
+    local c
+    for c in "${carpetas_tiff[@]}"; do ro_args+=(--tiff-dir "$c"); done
     [[ -n "$ENTREGA" ]] && ro_args+=(--entrega "$ENTREGA")
     local ro_csv
     if ro_csv=$(python3 "$REGISTRO_OCR_ICR" "${ro_args[@]}" 2>>"$MAIN_LOG"); then
@@ -612,25 +678,20 @@ step7_register() {
 # PIPELINE POR LIBRO
 # ─────────────────────────────────────────────────────────────────────────────
 
-export_png_from_tiff() {
-    # Exporta cada TIFF del libro a PNG (a PNG_DPI) en PNG/<libro>/.
-    # Conversión sin re-muestreo: el TIFF ya está a 300 DPI, solo se re-codifica
-    # a PNG conservando los píxeles originales (sin marca de agua ni OCR).
-    local book_name="$1"
-    local src_dir="${INPUT_DIR}/${book_name}"
-    local dst_dir="${PNG_DIR}/${book_name}"
+# exportar_png <carpeta TIFF> <carpeta PNG> <etiqueta>: cada TIFF a PNG (PNG_DPI)
+exportar_png() {
+    local src_dir="$1" dst_dir="$2" t="$3"
 
-    local n_tiff
-    n_tiff=$(find "$src_dir" -maxdepth 1 \( -iname "*.tif" -o -iname "*.tiff" \) -not -name '_*' 2>/dev/null | wc -l)
+    local n_tiff; n_tiff=$(contar_tiff "$src_dir")
     if [[ "$n_tiff" -eq 0 ]]; then
-        log_warn "[${book_name}] Export PNG: no hay TIFF en ${src_dir} (¿ya procesado/borrado?)."
+        log_warn "${t} Export PNG: no hay TIFF en ${src_dir} (¿ya procesado/borrado?)."
         return 1
     fi
 
     mkdir -p "$dst_dir"
-    log_info "[${book_name}] Export PNG: convirtiendo ${n_tiff} páginas a ${dst_dir} (${PNG_DPI} DPI)..."
+    log_info "${t} Export PNG: convirtiendo ${n_tiff} páginas a ${dst_dir} (${PNG_DPI} DPI)..."
 
-    SRC_DIR="$src_dir" DST_DIR="$dst_dir" PNG_DPI="$PNG_DPI" BOOK="$book_name" python3 - <<'PYEOF'
+    SRC_DIR="$src_dir" DST_DIR="$dst_dir" PNG_DPI="$PNG_DPI" python3 - <<'PYEOF'
 import os, sys, re
 from concurrent.futures import ThreadPoolExecutor
 from PIL import Image
@@ -688,11 +749,29 @@ PYEOF
     local n_png; n_png=$(find "$dst_dir" -maxdepth 1 -iname "*.png" 2>/dev/null | wc -l)
     local peso; peso=$(du -sh "$dst_dir" 2>/dev/null | awk '{print $1}')
     if [[ "$n_png" -gt 0 ]]; then
-        log_ok "[${book_name}] Export PNG: ${n_png} PNG en $(basename "$dst_dir")/ (${peso})."
+        log_ok "${t} Export PNG: ${n_png} PNG en $(basename "$dst_dir")/ (${peso})."
         return 0
     fi
-    log_error "[${book_name}] Export PNG: no se generó ningún PNG (rc=$rc)."
+    log_error "${t} Export PNG: no se generó ningún PNG (rc=$rc)."
     return 1
+}
+
+# Exporta los PNG del libro en PNG/<libro>/ (normal) o PNG/<libro>/<fragmento>/
+# (fragmentado: cada fragmento aparte, porque su numeración puede repetirse).
+# Conversión sin re-muestreo: el TIFF ya está a 300 DPI, solo se re-codifica a
+# PNG conservando los píxeles originales (sin marca de agua ni OCR).
+export_png_from_tiff() {
+    local book_name="$1" c fallos=0
+    while IFS=$'\t' read -r _ c _ _; do
+        if [[ "$c" == "${INPUT_DIR}/${book_name}" ]]; then
+            exportar_png "$c" "${PNG_DIR}/${book_name}" "[${book_name}]" || fallos=$((fallos + 1))
+        else
+            local frag; frag=$(sin_ok "$(basename "$c")")
+            exportar_png "$c" "${PNG_DIR}/${book_name}/${frag}" "$(etiqueta "$book_name" "$frag")" \
+                || fallos=$((fallos + 1))
+        fi
+    done < "$(plan_file "$book_name")"
+    [[ $fallos -eq 0 ]]
 }
 
 # "3 página(s) sin texto OCR (Tesseract falló): Hoja 2, Hoja 7, Hoja 9"
@@ -713,27 +792,52 @@ process_book() {
     log_step "║  LIBRO: ${book_name}"
     log_step "╚══════════════════════════════════════════════════════╝"
 
-    # ── PASO 3: Marca de agua ──
-    log_step "  [3/7] Marca de agua"
-    local marked_pdf
-    marked_pdf=$(step3_watermark "$book_name") || {
-        log_error "[${book_name}] Fallo en marca de agua. Enviando a REVIEW."
-        quarantine_book "$book_name" "Fallo en generación de marca de agua (paso 3)"
-        return 1
-    }
+    local -a unidades; mapfile -t unidades < <(plan_pdfs "$book_name")
+    if [[ ${#unidades[@]} -gt 1 ]]; then
+        log_info "[${book_name}] ${#unidades[@]} PDF (uno por fragmento): $(printf '%s, ' "${unidades[@]}" | sed 's/, $//')"
+    fi
 
-    # ── PASO 4: PDF/A-3b ──
-    log_step "  [4/7] PDF/A-3b v1.7"
-    local final_pdf
-    final_pdf=$(step4_pdfa "$book_name" "$marked_pdf") || {
-        log_error "[${book_name}] Fallo en conversión PDF/A. Enviando a REVIEW."
-        quarantine_book "$book_name" "Fallo en conversión PDF/A-3b (paso 4)"
-        return 1
-    }
+    # ── Fase A: pasos 3 a 6 de TODOS los PDF del libro. Si uno falla, el libro
+    # entero va a REVIEW y ningún PDF suyo llega a OUTPUT (todo o nada).
+    local -A finales=() pesos=()
+    local u t de
+    for u in "${unidades[@]}"; do
+        t=$(etiqueta "$book_name" "$u")
+        de=""; [[ "$u" != "$book_name" ]] && de=" en ${u}"
 
-    # ── PASO 5: Metadatos ──
-    log_step "  [5/7] Insertar metadatos"
-    step5_metadata "$book_name" "$final_pdf"
+        # ── PASO 3: Marca de agua ──
+        log_step "  [3/7] Marca de agua ${t}"
+        local marked_pdf
+        marked_pdf=$(step3_watermark "$book_name" "$u") || {
+            log_error "${t} Fallo en marca de agua. Enviando a REVIEW."
+            quarantine_book "$book_name" "Fallo en generación de marca de agua (paso 3)${de}"
+            return 1
+        }
+
+        # ── PASO 4: PDF/A-3b ──
+        log_step "  [4/7] PDF/A-3b v1.7 ${t}"
+        local final_pdf
+        final_pdf=$(step4_pdfa "$book_name" "$u" "$marked_pdf") || {
+            log_error "${t} Fallo en conversión PDF/A. Enviando a REVIEW."
+            quarantine_book "$book_name" "Fallo en conversión PDF/A-3b (paso 4)${de}"
+            return 1
+        }
+
+        # ── PASO 5: Metadatos ──
+        log_step "  [5/7] Insertar metadatos ${t}"
+        step5_metadata "$book_name" "$u" "$final_pdf"
+
+        # ── PASO 6: Verificar conteo TIFF == páginas PDF (regla ESTRICTA) ──
+        log_step "  [6/7] Verificar TIFF vs PDF → limpiar ${t}"
+        local peso_tiff
+        peso_tiff=$(step6_verify_and_cleanup "$book_name" "$u" "$final_pdf")
+        # Si step6 devuelve "REVIEW", el libro ya fue enviado a cuarentena → salir
+        if [[ "$peso_tiff" == "REVIEW" ]]; then
+            return 1
+        fi
+        finales[$u]="$final_pdf"
+        pesos[$u]="$peso_tiff"
+    done
 
     # ── EXTRA (--png): exportar PNG desde los TIFF antes de que se borren al final ──
     if [[ "$EXPORT_PNG" == "true" ]]; then
@@ -741,62 +845,58 @@ process_book() {
         export_png_from_tiff "$book_name" || log_warn "[${book_name}] Export PNG falló (el pipeline continúa)."
     fi
 
-    # ── PASO 6: Verificar conteo TIFF == páginas PDF (regla ESTRICTA) ──
-    log_step "  [6/7] Verificar TIFF vs PDF → limpiar"
-    local peso_tiff
-    peso_tiff=$(step6_verify_and_cleanup "$book_name" "$final_pdf")
-
-    # Si step6 devuelve "REVIEW", el libro ya fue enviado a cuarentena → salir
-    if [[ "$peso_tiff" == "REVIEW" ]]; then
-        return 1
-    fi
-
-    # ── Mover PDF final de TEMPORALES a OUTPUT ──
-    # FIX RACE CONDITION: primero se coloca el PDF final con su nombre definitivo
+    # ── Fase B: mover cada PDF final de TEMPORALES a OUTPUT y registrarlo ──
+    # FIX RACE CONDITION: primero se colocan los PDF finales con su nombre definitivo
     # y SOLO DESPUÉS se libera el lock (carpeta TEMPORALES/<libro>). Invariante: en
-    # todo instante existe el lock O el PDF final — nunca un hueco por el que otra
+    # todo instante existe el lock O los PDF finales — nunca un hueco por el que otra
     # terminal pueda re-procesar un libro ya terminado.
-    # Los libros sin metadatos no se mezclan con los completos: van a
+    # Los PDF sin metadatos no se mezclan con los completos: van a
     # OUTPUT/SIN METADATOS, de donde los toma inyectar_metadatos.sh
-    local book_status="OK" out_dir="$OUTPUT_DIR"
-    for nm in "${BOOKS_NO_META[@]}"; do
-        if [[ "$nm" == "$book_name" ]]; then
+    local -a estados=()
+    for u in "${unidades[@]}"; do
+        local dir; dir=$(unidad_dir "$book_name" "$u")
+        local book_status="OK" out_dir="$OUTPUT_DIR"
+        if [[ -f "${dir}/_sin_metadatos" ]]; then
             book_status="SIN_META"
             out_dir="${OUTPUT_DIR}/${SIN_META_SUBDIR}"
-            break
         fi
+        mkdir -p "$out_dir"
+        local out_pdf="${out_dir}/${u}.pdf"
+        if ! mv "${finales[$u]}" "$out_pdf"; then
+            log_error "[${book_name}] No se pudo mover ${u} a OUTPUT. Queda en TEMPORALES/${book_name}/; los TIFF siguen en INPUT."
+            record_result ERROR "$u" "PDF final no se pudo mover a OUTPUT; quedó en TEMPORALES/${book_name}/"
+            return 1
+        fi
+        log_ok "$(etiqueta "$book_name" "$u") PDF final disponible en ${out_pdf#"${OUTPUT_DIR}/"}"
+
+        # ── PASO 7: Registro CSV (solo PDF entregados) ──
+        log_step "  [7/7] Registro CSV $(etiqueta "$book_name" "$u")"
+        # Páginas del PDF entregado (el paso 6 ya verificó que coinciden con los TIFF)
+        local n_pages
+        n_pages=$(pdfinfo "$out_pdf" 2>/dev/null | awk '/^Pages:/{print $2}')
+        [[ -n "$n_pages" ]] || n_pages="?"
+        # Solo llega aquí con páginas sin OCR si se forzó con ACEPTAR_PAGINAS_SIN_OCR=1
+        local detalle=""
+        if [[ -s "${dir}/_paginas_sin_ocr.txt" ]]; then
+            detalle=$(paginas_sin_ocr "${dir}/_paginas_sin_ocr.txt")
+        fi
+        local -a carpetas_u; mapfile -t carpetas_u < <(plan_carpetas "$book_name" "$u")
+        step7_register "$u" "$out_pdf" "$n_pages" "${pesos[$u]}" "$book_status" "$detalle" "${carpetas_u[@]}"
+        estados+=("${book_status}|${u}")
     done
-    mkdir -p "$out_dir"
-    local out_pdf="${out_dir}/${book_name}.pdf"
-    if ! mv "$final_pdf" "$out_pdf"; then
-        log_error "[${book_name}] No se pudo mover el PDF final a OUTPUT. Queda en TEMPORALES/${book_name}/; los TIFF siguen en INPUT."
-        record_result ERROR "$book_name" "PDF final no se pudo mover a OUTPUT; quedó en TEMPORALES/${book_name}/"
-        return 1
-    fi
-    log_ok "[${book_name}] PDF final disponible en ${out_pdf#"${OUTPUT_DIR}/"}"
 
-    # ── PASO 7: Registro CSV (solo libros exitosos) ──
-    log_step "  [7/7] Registro CSV"
-    # Páginas del PDF entregado (el paso 6 ya verificó que coinciden con los TIFF)
-    local n_pages
-    n_pages=$(pdfinfo "$out_pdf" 2>/dev/null | awk '/^Pages:/{print $2}')
-    [[ -n "$n_pages" ]] || n_pages="?"
-    # Solo llega aquí con páginas sin OCR si se forzó con ACEPTAR_PAGINAS_SIN_OCR=1
-    local detalle=""
-    if [[ -s "${TEMP_DIR}/${book_name}/_paginas_sin_ocr.txt" ]]; then
-        detalle=$(paginas_sin_ocr "${TEMP_DIR}/${book_name}/_paginas_sin_ocr.txt")
-    fi
-    step7_register "$book_name" "$out_pdf" "$n_pages" "$peso_tiff" "$book_status" "$detalle"
-
-    # ── Recién ahora se borran los TIFF: el PDF ya está en OUTPUT y registrado ──
-    log_info "[${book_name}] Eliminando TIFFs originales (${peso_tiff} GB)..."
-    rm -rf "${INPUT_DIR}/${book_name}"
+    # ── Recién ahora se borran los TIFF: todos los PDF ya están en OUTPUT y registrados ──
+    log_info "[${book_name}] Eliminando TIFFs originales de INPUT/${book_name}..."
+    rm -rf "${INPUT_DIR:?}/${book_name}"
 
     # ── Liberar el lock: eliminar TEMPORALES/<libro> ──
-    rm -rf "${TEMP_DIR}/${book_name}" 2>/dev/null || true
+    rm -rf "${TEMP_DIR:?}/${book_name}" 2>/dev/null || true
 
     # ── Libro completado exitosamente ──
-    record_result "$book_status" "$book_name"
+    local e
+    for e in "${estados[@]}"; do
+        record_result "${e%%|*}" "${e#*|}"
+    done
     CURRENT_BOOK=""   # Limpiar tracker para que el trap no lo libere
 
     local end; end=$(date +%s)
@@ -838,6 +938,12 @@ usage() {
                         Default: CONGRESO DE LA REPÚBLICA - REPOSITORIO CÁMARA DE REPRESENTANTES
     --marca-diagonal <txt>  Marca diagonal opcional (de abajo-izquierda a arriba-derecha),
                         p. ej. "CÁMARA DE REPRESENTANTES". Default: sin marca diagonal.
+    --fragmentados <unico|fragmentos>
+                        Acepta libros que vienen en subcarpetas (LIBRO/<parte>/*.tif).
+                        unico = un PDF con todo el libro (nombre del libro) ·
+                        fragmentos = un PDF por subcarpeta (nombre de la subcarpeta).
+                        Sin esta opción, un libro con subcarpetas va a REVIEW.
+                        Orden de las partes: por mes y año, o por número (ver libros.py).
     --entrega <1-30>    Entrega de estos libros; va en el registro OCR-ICR del día
                         (REGISTRO/registro OCR-ICR <d> <Mes> <aaaa>.csv).
     --meta-config <json>   Qué columna del CSV es el código y cómo se arma cada campo
@@ -902,6 +1008,7 @@ parse_args() {
             --marca-config)     MARCA_CONFIG="$2"; shift 2 ;;
             --meta-config)      META_CONFIG="$2"; shift 2 ;;
             --entrega)          ENTREGA="$2"; shift 2 ;;
+            --fragmentados)     FRAGMENTADOS="$2"; shift 2 ;;
             --input-dir)        INPUT_DIR="$2"; shift 2 ;;
             --output-dir)       OUTPUT_DIR="$2"; shift 2 ;;
             --temp-dir)         TEMP_DIR="$2"; shift 2 ;;
@@ -915,6 +1022,10 @@ parse_args() {
     # Validar --jobs y --ocr-jobs
     if ! [[ "$PARALLEL_JOBS" =~ ^[1-9][0-9]*$ ]]; then
         log_error "--jobs requiere un número entero positivo (recibido: '$PARALLEL_JOBS')"
+        exit 1
+    fi
+    if [[ -n "$FRAGMENTADOS" && "$FRAGMENTADOS" != "unico" && "$FRAGMENTADOS" != "fragmentos" ]]; then
+        log_error "--fragmentados acepta: unico | fragmentos (recibido: '$FRAGMENTADOS')"
         exit 1
     fi
     if [[ -n "$OCR_JOBS" ]] && ! [[ "$OCR_JOBS" =~ ^[1-9][0-9]*$ ]]; then
@@ -1042,26 +1153,100 @@ main() {
         log_step " PROCESANDO LIBRO: $book"
         log_step "=========================================================="
 
-        local book_pdf="${TEMP_DIR}/${book}/${book}_ocr.pdf"
-        local -a ocr_args=(-i "${INPUT_DIR}/${book}" -o "$TEMP_DIR")
-        if [[ -n "$OCR_JOBS" ]]; then ocr_args+=(-j "$OCR_JOBS"); fi
-        if [[ "$SKIP_OCR" != "true" ]]; then
+        # ── Plan del libro (libros.py): qué PDF salen, con qué TIFF y en qué orden.
+        # El orden se decide aquí UNA sola vez; el OCR y la unión lo siguen.
+        local plan_tsv; plan_tsv=$(plan_file "$book")
+        local plan_msg plan_rc=0
+        plan_msg=$(python3 "$LIBROS_PY" plan "${INPUT_DIR}/${book}" --modo "$FRAGMENTADOS" \
+                   --salida "$plan_tsv" 2>&1) || plan_rc=$?
+        if [[ $plan_rc -eq 2 ]]; then
+            log_error "[${book}] 🚫 ${plan_msg}. Enviando a REVIEW."
+            quarantine_book "$book" "$plan_msg"
+            CURRENT_BOOK=""
+            continue
+        elif [[ $plan_rc -ne 0 ]]; then
+            log_error "[${book}] No se pudo leer la carpeta del libro: ${plan_msg##*$'\n'}"
+            rm -rf "${TEMP_DIR:?}/${book}" 2>/dev/null || true
+            record_result REINTENTAR "$book" "No se pudo leer la carpeta del libro"
+            CURRENT_BOOK=""
+            continue
+        fi
+
+        local -a _pdfs=() _carpetas=() _ordenes=()
+        mapfile -t _pdfs < <(plan_pdfs "$book")
+        local _u _c _o _n
+        while IFS=$'\t' read -r _u _c _o _n; do
+            _carpetas+=("$_c"); _ordenes+=("$_o")
+        done < "$plan_tsv"
+        local fragmentado=false
+        [[ "${_carpetas[0]}" != "${INPUT_DIR}/${book}" ]] && fragmentado=true
+        if [[ "$fragmentado" == true ]]; then
+            local _orden_txt=""
+            for _c in "${_carpetas[@]}"; do
+                _orden_txt+="${_orden_txt:+ → }$(sin_ok "$(basename "$_c")") ($(contar_tiff "$_c"))"
+            done
+            log_info "[${book}] Libro fragmentado en ${#_carpetas[@]} partes, en este orden: ${_orden_txt}"
+            log_info "[${book}] Sale(n) ${#_pdfs[@]} PDF: $(printf '%s, ' "${_pdfs[@]}" | sed 's/, $//')"
+
+            # Un PDF de fragmento con el mismo nombre que uno ya entregado: no se pisa
+            local -a _existen=()
+            for _u in "${_pdfs[@]}"; do
+                [[ -f "${OUTPUT_DIR}/${_u}.pdf" || -f "${OUTPUT_DIR}/${SIN_META_SUBDIR}/${_u}.pdf" ]] && _existen+=("$_u")
+            done
+            if [[ ${#_existen[@]} -gt 0 && ${#_existen[@]} -eq ${#_pdfs[@]} ]]; then
+                log_info "[${book}] Todos sus PDF ya existen en OUTPUT. Omitiendo (ya completado)."
+                rm -rf "${TEMP_DIR:?}/${book}" 2>/dev/null || true
+                record_result OMITIDO "$book"
+                CURRENT_BOOK=""
+                continue
+            elif [[ ${#_existen[@]} -gt 0 ]]; then
+                quarantine_book "$book" "Ya existe(n) en OUTPUT: $(IFS=', '; echo "${_existen[*]}")"
+                CURRENT_BOOK=""
+                continue
+            fi
+        fi
+
+        # OCR de cada carpeta de TIFF. Libro normal: como siempre, en
+        # TEMPORALES/<libro>/. Fragmentado: TEMPORALES/<libro>/ocr/<subcarpeta>/.
+        local ocr_out="$TEMP_DIR"
+        [[ "$fragmentado" == true ]] && ocr_out="${TEMP_DIR}/${book}/ocr"
+        local -a _ocr_pdfs=()
+        local i
+        for i in "${!_carpetas[@]}"; do
+            _c="${_carpetas[$i]}"
+            local _base; _base=$(basename "$_c")
+            local _pdf_ocr="${ocr_out}/${_base}/${_base}_ocr.pdf"
+            _ocr_pdfs+=("$_pdf_ocr")
+            local -a ocr_args=(-i "$_c" -o "$ocr_out" --orden "${_ordenes[$i]}")
+            if [[ -n "$OCR_JOBS" ]]; then ocr_args+=(-j "$OCR_JOBS"); fi
+            if [[ "$SKIP_OCR" == "true" ]]; then
+                continue
+            fi
+            [[ "$fragmentado" == true ]] && log_info "[${book}] OCR de la parte $((i + 1)) de ${#_carpetas[@]}: ${_base}"
             log_step "  -> [1/2] Ejecutando Fase OCR..."
             bash "$RUN_OCR" "${ocr_args[@]}" 2>&1 | tee -a "$MAIN_LOG" || true
 
             # Un fallo del OCR suele ser pasajero (memoria, un proceso caído):
             # se reintenta una vez. Las páginas ya hechas no se repiten.
-            if [[ ! -f "$book_pdf" && ! -f "${INPUT_DIR}/${book}/_book_rejected.json" ]]; then
-                log_warn "[${book}] El OCR no generó el PDF. Reintentando una vez..."
+            if [[ ! -f "$_pdf_ocr" && ! -f "${_c}/_book_rejected.json" ]]; then
+                if [[ "$fragmentado" == true ]]; then
+                    log_warn "[${book}] El OCR no generó el PDF de ${_base}. Reintentando una vez..."
+                else
+                    log_warn "[${book}] El OCR no generó el PDF. Reintentando una vez..."
+                fi
                 bash "$RUN_OCR" "${ocr_args[@]}" 2>&1 | tee -a "$MAIN_LOG" || true
             fi
-        else
-            log_info "  -> [1/2] Fase OCR omitida (--skip-ocr activo)."
-        fi
+            # Una parte rechazada (DPI, corruptas) ya decide el libro: no se sigue con las demás
+            if [[ -f "${_c}/_book_rejected.json" ]]; then break; fi
+        done
+        [[ "$SKIP_OCR" == "true" ]] && log_info "  -> [1/2] Fase OCR omitida (--skip-ocr activo)."
 
-        # ── Detectar si el libro fue RECHAZADO por preprocess_validate.py ──
-        local _rejected_file="${INPUT_DIR}/${book}/_book_rejected.json"
-        if [[ -f "$_rejected_file" ]]; then
+        # ── Detectar si el libro (o una de sus partes) fue RECHAZADO por preprocess_validate.py ──
+        local _rejected_file=""
+        for _c in "${_carpetas[@]}"; do
+            if [[ -f "${_c}/_book_rejected.json" ]]; then _rejected_file="${_c}/_book_rejected.json"; break; fi
+        done
+        if [[ -n "$_rejected_file" ]]; then
             local _reject_summary
             _reject_summary=$(REJ_FILE="$_rejected_file" python3 -c "
 import json, os, sys
@@ -1074,8 +1259,10 @@ files = ', '.join(p['file'] for p in probs[:5])
 extra = f' (+{len(probs)-5} más)' if len(probs) > 5 else ''
 print(f'{dpi_count} DPI≠300, {corrupt_count} corruptas → {files}{extra}')
 " 2>/dev/null || echo "ver _book_rejected.json")
-            log_error "[${book}] 🚫 LIBRO RECHAZADO (DPI/Corrupta). Enviando a REVIEW."
-            quarantine_book "$book" "Imágenes inválidas: ${_reject_summary}"
+            local _parte=""
+            [[ "$fragmentado" == true ]] && _parte=" en $(basename "$(dirname "$_rejected_file")")"
+            log_error "[${book}] 🚫 LIBRO RECHAZADO (DPI/Corrupta)${_parte}. Enviando a REVIEW."
+            quarantine_book "$book" "Imágenes inválidas${_parte}: ${_reject_summary}"
             CURRENT_BOOK=""
             continue
         fi
@@ -1084,8 +1271,13 @@ print(f'{dpi_count} DPI≠300, {corrupt_count} corruptas → {files}{extra}')
         # Las imágenes ya se validaron (DPI, corruptas), así que es un fallo de
         # ejecución, no del libro: se libera el candado y se reprocesa en la
         # próxima ejecución. Nunca va a REVIEW por esto.
-        if [[ ! -f "$book_pdf" ]]; then
+        local _falta_ocr=""
+        for _o in "${_ocr_pdfs[@]}"; do
+            if [[ ! -f "$_o" ]]; then _falta_ocr="$_o"; break; fi
+        done
+        if [[ -n "$_falta_ocr" ]]; then
             local ocr_motivo="OCR no generó el PDF (tras 1 reintento)"
+            [[ "$fragmentado" == true ]] && ocr_motivo+=" de $(basename "$(dirname "$_falta_ocr")")"
             local tess_err_log="${LOG_DIR}/tesseract_errors.log"
             local last_err=""
             if [[ -f "$tess_err_log" ]]; then
@@ -1093,10 +1285,52 @@ print(f'{dpi_count} DPI≠300, {corrupt_count} corruptas → {files}{extra}')
             fi
             [[ -n "$last_err" ]] && ocr_motivo="${ocr_motivo}: ${last_err}"
             log_error "[${book}] ${ocr_motivo}. Queda en INPUT para reintentar en la próxima ejecución."
-            rm -rf "${TEMP_DIR}/${book}" 2>/dev/null || true
+            rm -rf "${TEMP_DIR:?}/${book}" 2>/dev/null || true
             record_result REINTENTAR "$book" "$ocr_motivo"
             CURRENT_BOOK=""
             continue
+        fi
+
+        # ── Libro fragmentado: armar el PDF del OCR de cada PDF de salida, uniendo
+        # sus partes en el orden del plan (nunca ordenando nombres otra vez) ──
+        if [[ "$fragmentado" == true ]]; then
+            local _armado_ok=true
+            for _u in "${_pdfs[@]}"; do
+                local _dir; _dir=$(unidad_dir "$book" "$_u")
+                mkdir -p "$_dir"
+                local -a _partes=()
+                for i in "${!_carpetas[@]}"; do
+                    [[ "$(awk -F'\t' -v n=$((i + 1)) 'NR == n { print $1 }' "$plan_tsv")" == "$_u" ]] \
+                        && _partes+=("${_ocr_pdfs[$i]}")
+                done
+                # Páginas sin OCR de sus partes, con el nombre de la parte delante
+                for _o in "${_partes[@]}"; do
+                    local _marca_sin_ocr; _marca_sin_ocr="$(dirname "$_o")/_paginas_sin_ocr.txt"
+                    if [[ -s "$_marca_sin_ocr" ]]; then
+                        local _parte_nombre; _parte_nombre=$(sin_ok "$(basename "$(dirname "$_o")")")
+                        awk -v p="${_parte_nombre}/" '{ print p $0 }' "$_marca_sin_ocr" | tee -a "${TEMP_DIR}/${book}/_paginas_sin_ocr.txt" \
+                            >> "${_dir}/_paginas_sin_ocr.txt.tmp"
+                    fi
+                done
+                if [[ -f "${_dir}/_paginas_sin_ocr.txt.tmp" && "$_dir" != "${TEMP_DIR}/${book}" ]]; then
+                    mv "${_dir}/_paginas_sin_ocr.txt.tmp" "${_dir}/_paginas_sin_ocr.txt"
+                fi
+                rm -f "${_dir}/_paginas_sin_ocr.txt.tmp"
+                if [[ ${#_partes[@]} -eq 1 ]]; then
+                    mv "${_partes[0]}" "${_dir}/${_u}_ocr.pdf" || _armado_ok=false
+                elif ! pdfunite "${_partes[@]}" "${_dir}/${_u}_ocr.pdf" 2>>"${LOG_DIR}/pdfunite_errors.log"; then
+                    _armado_ok=false
+                fi
+                [[ "$_armado_ok" == true ]] || break
+                log_ok "[${book}] PDF de ${_u} armado con ${#_partes[@]} parte(s), en orden."
+            done
+            if [[ "$_armado_ok" != true ]]; then
+                log_error "[${book}] No se pudieron unir las partes del libro. Queda en INPUT para reintentar."
+                rm -rf "${TEMP_DIR:?}/${book}" 2>/dev/null || true
+                record_result REINTENTAR "$book" "No se pudieron unir las partes del libro"
+                CURRENT_BOOK=""
+                continue
+            fi
         fi
 
         # ── Páginas que Tesseract no pudo leer: OCR.sh las metió como imagen sin
