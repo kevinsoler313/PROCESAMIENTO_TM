@@ -58,7 +58,15 @@ done
 SIN_META_DIR="${OUTPUT_DIR}/${SIN_META_SUBDIR}"
 REGISTRO_CSV="${REGISTRO_DIR}/registro_libros_procesados.csv"
 
-for cmd in exiftool pdfinfo sha256sum; do
+# Los metadatos se escriben con pikepdf, que está en ocr_env (la interfaz no
+# deja ese python en el PATH de este script)
+if [[ -f "${SCRIPT_DIR}/ocr_env/bin/activate" ]]; then
+    # shellcheck disable=SC1091
+    source "${SCRIPT_DIR}/ocr_env/bin/activate"
+fi
+python3 -c "import pikepdf" 2>/dev/null \
+    || { _log ERROR "Falta pikepdf (ocr_env). Ejecuta: bash instalar.sh"; exit 1; }
+for cmd in pdfinfo sha256sum; do
     command -v "$cmd" >/dev/null || { _log ERROR "Falta: $cmd"; exit 1; }
 done
 [[ -f "$CSV_META" ]] || { _log ERROR "Falta el CSV de metadatos (--csv): ${CSV_META:-sin indicar}"; exit 1; }
@@ -96,6 +104,18 @@ actualizar_registro() {
     awk -F'|' -v c="$libro" '$1!=c' "$REGISTRO_CSV" > "${REGISTRO_CSV}.tmp" && mv "${REGISTRO_CSV}.tmp" "$REGISTRO_CSV"
     printf '%s|%s|%s|%s|%s|%s|%s|%s\n' "$libro" "${paginas:-?}" "$peso_carpeta" "$peso" "OK" "$fecha" "$sha" \
         "Metadatos inyectados después ($(basename "$CSV_META"))" >> "$REGISTRO_CSV"
+
+    # El PDF cambió: su fila en el registro OCR-ICR del día en que se procesó
+    # (puede ser otro día) también lleva el peso y el hash nuevos
+    local rutas
+    if rutas=$(python3 "${SCRIPT_DIR}/registro_ocr_icr.py" actualizar --registro-dir "$REGISTRO_DIR" \
+                   --pdf "$pdf" --hash "$sha" 2>>"$LOG"); then
+        while IFS= read -r r; do
+            _log OK "[${libro}] Registro OCR-ICR actualizado (peso y hash) → $(basename "$r")"
+        done <<< "$rutas"
+    else
+        _log WARN "[${libro}] No está en ningún registro OCR-ICR de ${REGISTRO_DIR}; si ya se entregó en un CSV, corrígelo a mano (hash nuevo: ${sha})."
+    fi
 }
 
 ok=0; falta=0; error=0
@@ -118,8 +138,8 @@ for pdf in "$SIN_META_DIR"/*.pdf; do
         error=$((error + 1)); continue
     fi
     if ! meta_escribir "$libro" "$pdf" "$meta" || ! pdfinfo "$pdf" >/dev/null 2>&1; then
-        _log ERROR "[${libro}] exiftool no pudo escribir los metadatos."
-        echo "ERROR|${libro}|exiftool no pudo escribir los metadatos" >> "$RESULTADOS"
+        _log ERROR "[${libro}] no se pudieron escribir los metadatos."
+        echo "ERROR|${libro}|no se pudieron escribir los metadatos" >> "$RESULTADOS"
         error=$((error + 1)); continue
     fi
     mv "$pdf" "$destino"

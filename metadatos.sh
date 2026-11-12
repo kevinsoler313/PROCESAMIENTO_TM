@@ -11,7 +11,7 @@
 #                                        separados por 0x1F (uno por línea)
 #   meta_buscar  <codigo> <indice>     → la línea del índice, o nada si no está
 #   meta_titulo  <linea>               → el título que se escribirá (para el log)
-#   meta_escribir <libro> <pdf> <linea> → escribe los metadatos con exiftool
+#   meta_escribir <libro> <pdf> <linea> → escribe los metadatos (pikepdf, PDF/A válido)
 #
 #   Carpeta dentro de OUTPUT donde quedan los PDF sin metadatos:
 #   SIN_META_SUBDIR
@@ -48,14 +48,9 @@ meta_titulo() {
 }
 
 meta_escribir() {
-    local pdf="$2" meta="$3" i
-    local -a v args=()
-    # 0x1F no es espacio para bash: los campos vacíos se conservan en su lugar
-    IFS="$META_SEP" read -r -a v <<< "$meta"
-    for i in "${!META_CAMPOS[@]}"; do
-        # Plantilla vacía = el campo no se escribe
-        [[ -n "${v[$((i + 1))]:-}" ]] && args+=("-${META_CAMPOS[$i]}=${v[$((i + 1))]}")
-    done
-    (( ${#args[@]} )) || return 0
-    exiftool -q -overwrite_original "${args[@]}" "$pdf" 2>/dev/null
+    # Con pikepdf (metadatos.py escribir), no con exiftool: exiftool deja el
+    # diccionario Info y el XMP distintos y el PDF deja de ser PDF/A-3B válido.
+    # La línea va por variable de entorno: ningún valor del CSV se mete en código.
+    local pdf="$2" meta="$3"
+    META_LINEA="$meta" python3 "$META_PY" escribir --pdf "$pdf"
 }

@@ -401,7 +401,10 @@ print(f'PDF de imagen generado: {os.path.getsize(out_pdf)} bytes')
 " 2>>"${LOG_DIR}/tesseract_errors.log"
 
         if [[ -f "${out_base}.pdf" ]]; then
-            log_ok "[TESSERACT] ✓ ${book_name}/${base} (FALLBACK: PDF de imagen sin OCR — página preservada)"
+            # Marca para main.sh: el libro tiene páginas sin texto y no se entrega como OK.
+            # Una línea corta con >> es atómica, aunque escriban varias páginas a la vez.
+            echo "$base" >> "${OUTPUT_DIR}/${book_name}/_paginas_sin_ocr.txt"
+            log_warn "[TESSERACT] ⚠ ${book_name}/${base} (FALLBACK: PDF de imagen SIN TEXTO OCR — el libro irá a REVIEW)"
             echo "[$(date '+%Y-%m-%d %H:%M:%S')] FALLBACK_IMG: ${book_name}/${base} | Tesseract crash → PDF de imagen generado" \
                 >> "${LOG_DIR}/tesseract_segfaults.log"
             return 0

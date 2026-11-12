@@ -193,7 +193,10 @@ def aplicar(entrada, salida, logo_ruta, cfg):
     # Cache de overlays por tamaño de página: los libros escaneados suelen tener
     # un solo tamaño, así que el overlay se genera una vez y se reutiliza.
     cache = {}
-    for page in reader.pages:
+    for original in reader.pages:
+        # La página se agrega primero al writer y se marca ahí: pypdf 7 ya no deja
+        # modificar páginas que no pertenecen a un writer (antes funcionaba igual)
+        page = writer.add_page(original)
         # /Rotate se pasa al contenido para que la marca quede derecha tal como se ve
         if page.rotation:
             page.transfer_rotation_to_content()
@@ -205,7 +208,6 @@ def aplicar(entrada, salida, logo_ruta, cfg):
             cache[key] = overlay(pw, ph, cfg, logo)
         wm = PdfReader(BytesIO(cache[key]))
         page.merge_translated_page(wm.pages[0], tx=float(box.left), ty=float(box.bottom))
-        writer.add_page(page)
 
     with open(salida, "wb") as f:
         writer.write(f)

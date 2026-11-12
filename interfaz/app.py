@@ -544,7 +544,8 @@ class PanelMetadatos(QObject):
         self.widgets += [self.encabezado, self.codigo, b]
         nota = QLabel("Cada campo es texto libre con columnas del CSV: «+ Columna» agrega {N} donde está "
                       "el cursor. Ej.: Congreso de la República - {3}. Un campo vacío no se escribe en el "
-                      "PDF.", objectName="sub")
+                      "PDF. En PDF/A, Asunto y Descripción ocupan el mismo lugar: si Asunto tiene texto, "
+                      "Descripción no se escribe.", objectName="sub")
         nota.setWordWrap(True)
         lay.addWidget(nota)
         grid = QGridLayout()
@@ -1423,6 +1424,14 @@ class Ventana(QMainWindow):
         self.ocricr_entrega.currentIndexChanged.connect(
             lambda _: self.ajustes.setValue("ocricr_entrega", self.ocricr_entrega.currentData()))
         grid.addWidget(self.ocricr_entrega, 2, 1, Qt.AlignLeft)
+        # El SHA-256 obliga a leer cada PDF completo: es lo que más demora. Sin él,
+        # la columna HASH queda vacía (sirve para revisar páginas, pesos e imágenes).
+        self.ocricr_hash = QCheckBox("Calcular HASH (SHA-256 de cada PDF)")
+        self.ocricr_hash.setToolTip("Sin marcar, el CSV sale mucho más rápido pero con la columna HASH "
+                                    "vacía. Para entregar, déjalo marcado.")
+        self.ocricr_hash.setChecked(str(self.ajustes.value("ocricr_hash", "true")).lower() == "true")
+        self.ocricr_hash.toggled.connect(lambda si: self.ajustes.setValue("ocricr_hash", "true" if si else "false"))
+        grid.addWidget(self.ocricr_hash, 3, 1, Qt.AlignLeft)
         grid.setColumnStretch(1, 1)
         lay.addLayout(grid)
 
@@ -1933,19 +1942,24 @@ class Ventana(QMainWindow):
         if not destino:
             return
         self.btn_ocricr.setEnabled(False)
-        self.ocricr_resultado.setText(f"Calculando SHA-256… 0 de {len(libros)} libros")
-        threading.Thread(target=self._ocricr_escribir, args=(libros, entrega, destino), daemon=True).start()
+        con_hash = self.ocricr_hash.isChecked()
+        if con_hash:
+            self.ocricr_resultado.setText(f"Calculando SHA-256… 0 de {len(libros)} libros")
+        threading.Thread(target=self._ocricr_escribir, args=(libros, entrega, destino, con_hash),
+                         daemon=True).start()
 
-    def _ocricr_escribir(self, libros, entrega, destino):
+    def _ocricr_escribir(self, libros, entrega, destino, con_hash=True):
         try:
             filas = []
             for n, x in enumerate(libros, 1):
                 filas.append(RO.fila(x["codigo"], x["imagenes"], x["pdf"].stat().st_size, x["bytes_tiff"],
-                                     entrega, RO.sha256(x["pdf"])))
-                self.ocricr_evento.emit("hash", n, len(libros))
+                                     entrega, RO.sha256(x["pdf"]) if con_hash else ""))
+                if con_hash:
+                    self.ocricr_evento.emit("hash", n, len(libros))
             Path(destino).parent.mkdir(parents=True, exist_ok=True)
             RO.escribir_csv(destino, filas)
-            self.ocricr_evento.emit("fin", 0, {"filas": filas, "destino": destino, "entrega": entrega})
+            self.ocricr_evento.emit("fin", 0, {"filas": filas, "destino": destino, "entrega": entrega,
+                                               "con_hash": con_hash})
         except OSError as e:
             self.ocricr_evento.emit("fin", 0, {"error": str(e)})
 
@@ -1957,8 +1971,9 @@ class Ventana(QMainWindow):
             return
         imagenes = sum(f[2] for f in datos["filas"])
         imagenes_txt = f"{imagenes:,}".replace(",", ".")
+        sin_hash = "" if datos.get("con_hash", True) else " · sin HASH"
         self.ocricr_resultado.setText(f"✓ {len(datos['filas'])} libro(s), {imagenes_txt} imágenes · "
-                                      f"ENTREGA {datos['entrega']:02d}\n{datos['destino']}")
+                                      f"ENTREGA {datos['entrega']:02d}{sin_hash}\n{datos['destino']}")
 
     # ── Inyectar metadatos ─────────────────────────────────────────────────
 

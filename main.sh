@@ -10,7 +10,7 @@
 #   PASO 2 · OCR (run_ocr.sh) → PDF por libro
 #   PASO 3 · Marca de agua (pypdf + reportlab + logo.png)
 #   PASO 4 · Conversión PDF/A-3b v1.7 (ocrmypdf --skip-text)
-#   PASO 5 · Metadatos (exiftool desde CSV)
+#   PASO 5 · Metadatos (pikepdf desde CSV, PDF/A válido)
 #   PASO 6 · Verificación TIFF vs páginas PDF → limpiar TIFFs si coincide
 #   PASO 7 · Registro SHA-256 (CSV final)
 #
@@ -263,7 +263,7 @@ quarantine_book() {
 check_deps() {
     log_info "Verificando dependencias..."
     local missing=0
-    for cmd in exiftool ocrmypdf pdfunite; do
+    for cmd in ocrmypdf pdfunite pdfinfo; do
         command -v "$cmd" &>/dev/null || { log_error "Falta: $cmd"; missing=$((missing+1)); }
     done
     [[ -f "$VENV_DIR/bin/activate" ]] || { log_error "Falta entorno virtual: $VENV_DIR"; missing=$((missing+1)); }
@@ -464,7 +464,7 @@ step4_pdfa() {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PASO 5 · METADATOS (exiftool desde CSV)
+# PASO 5 · METADATOS (pikepdf desde CSV: Info y XMP iguales, PDF/A válido)
 # ─────────────────────────────────────────────────────────────────────────────
 
 step5_metadata() {
@@ -483,7 +483,7 @@ step5_metadata() {
     fi
 
     log_info "[${book_name}] Insertando metadatos: Title=$(meta_titulo "$meta")"
-    meta_escribir "$book_name" "$pdf_path" "$meta"     && log_ok "[${book_name}] Metadatos insertados."     || log_warn "[${book_name}] Advertencia: exiftool no pudo escribir algunos metadatos."
+    meta_escribir "$book_name" "$pdf_path" "$meta"     && log_ok "[${book_name}] Metadatos insertados."     || log_warn "[${book_name}] Advertencia: no se pudieron escribir los metadatos (ver log)."
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -695,6 +695,15 @@ PYEOF
     return 1
 }
 
+# "3 página(s) sin texto OCR (Tesseract falló): Hoja 2, Hoja 7, Hoja 9"
+paginas_sin_ocr() {
+    local archivo="$1" n lista
+    n=$(sort -u "$archivo" | wc -l)
+    lista=$(sort -uV "$archivo" | head -5 | paste -sd ',' - | sed 's/,/, /g')
+    (( n > 5 )) && lista+=" (+$((n - 5)) más)"
+    printf '%s página(s) sin texto OCR (Tesseract falló): %s' "$n" "$lista"
+}
+
 process_book() {
     local book_name="$1"
     local start; start=$(date +%s)
@@ -772,7 +781,12 @@ process_book() {
     local n_pages
     n_pages=$(pdfinfo "$out_pdf" 2>/dev/null | awk '/^Pages:/{print $2}')
     [[ -n "$n_pages" ]] || n_pages="?"
-    step7_register "$book_name" "$out_pdf" "$n_pages" "$peso_tiff" "$book_status" ""
+    # Solo llega aquí con páginas sin OCR si se forzó con ACEPTAR_PAGINAS_SIN_OCR=1
+    local detalle=""
+    if [[ -s "${TEMP_DIR}/${book_name}/_paginas_sin_ocr.txt" ]]; then
+        detalle=$(paginas_sin_ocr "${TEMP_DIR}/${book_name}/_paginas_sin_ocr.txt")
+    fi
+    step7_register "$book_name" "$out_pdf" "$n_pages" "$peso_tiff" "$book_status" "$detalle"
 
     # ── Recién ahora se borran los TIFF: el PDF ya está en OUTPUT y registrado ──
     log_info "[${book_name}] Eliminando TIFFs originales (${peso_tiff} GB)..."
@@ -845,7 +859,7 @@ usage() {
     2 · OCR          run_ocr.sh → PDF por libro
     3 · Marca agua   logo.png + texto en cada página
     4 · PDF/A-3b     ocrmypdf --skip-text --pdf-version 1.7
-    5 · Metadatos    exiftool desde TechnoMart Funza - TEMP.csv
+    5 · Metadatos    pikepdf desde el CSV (Info y XMP iguales, PDF/A válido)
     6 · Verificar    TIFF == páginas PDF → eliminar TIFFs
     7 · Registro     REGISTRO/registro_libros_procesados.csv (con SHA-256)
 
@@ -1083,6 +1097,23 @@ print(f'{dpi_count} DPI≠300, {corrupt_count} corruptas → {files}{extra}')
             record_result REINTENTAR "$book" "$ocr_motivo"
             CURRENT_BOOK=""
             continue
+        fi
+
+        # ── Páginas que Tesseract no pudo leer: OCR.sh las metió como imagen sin
+        # texto. Como los TIFF se borran al entregar, el libro no se entrega así:
+        # va a REVIEW con sus TIFF. Para entregarlo de todos modos (p. ej. páginas
+        # en blanco o dañadas que nunca tendrán texto): ACEPTAR_PAGINAS_SIN_OCR=1
+        local _sin_ocr_file="${TEMP_DIR}/${book}/_paginas_sin_ocr.txt"
+        if [[ -s "$_sin_ocr_file" ]]; then
+            local _sin_ocr_txt
+            _sin_ocr_txt=$(paginas_sin_ocr "$_sin_ocr_file")
+            if [[ "${ACEPTAR_PAGINAS_SIN_OCR:-0}" != "1" ]]; then
+                log_error "[${book}] 🚫 ${_sin_ocr_txt}. Enviando a REVIEW (los TIFF se conservan)."
+                quarantine_book "$book" "$_sin_ocr_txt"
+                CURRENT_BOOK=""
+                continue
+            fi
+            log_warn "[${book}] ⚠ ${_sin_ocr_txt}. Se entrega igual (ACEPTAR_PAGINAS_SIN_OCR=1); queda anotado en el registro."
         fi
 
         # ── POST-PROCESO: ejecutar en paralelo si --jobs > 1 ──

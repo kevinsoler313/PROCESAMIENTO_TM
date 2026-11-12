@@ -18,7 +18,7 @@ INPUT/<libro>/*.tif
             · Tesseract por página, en paralelo
        3. Marca de agua (logo + texto)
        4. PDF/A-3B con ocrmypdf, cabecera PDF 1.7
-       5. Metadatos con exiftool desde el CSV
+       5. Metadatos desde el CSV (pikepdf: Info y XMP iguales, PDF/A válido)
        6. Verifica: páginas del PDF == número de TIFF
        7. Mueve el PDF a OUTPUT (o a OUTPUT/SIN METADATOS si el libro no
           está en el CSV), lo registra y recién entonces borra los TIFF
@@ -202,6 +202,15 @@ fila por cada PDF de la carpeta de PDF (solo la raíz).
 La interfaz avisa de los libros sin carpeta de TIFF y de los que tienen más o
 menos páginas en el PDF que imágenes TIFF.
 
+La casilla **Calcular HASH** (marcada por defecto) decide si se calcula el
+SHA-256 de cada PDF. Sin marcar, el CSV sale mucho más rápido pero con la
+columna HASH vacía; sirve para revisar páginas, pesos e imágenes, no para
+entregar. Desde la terminal: `--sin-hash`.
+
+**Si se inyectan metadatos después** (`inyectar_metadatos.sh`), el PDF cambia,
+y con él su peso y su hash: se corrigen en `registro_libros_procesados.csv` y
+en el registro OCR-ICR del día en que se procesó el libro.
+
 ```bash
 python3 registro_ocr_icr.py --pdf-dir /mnt/datos/OUTPUT --tiff-dir /datos/TIFF --entrega 6 --salida registro.csv
 ```
@@ -280,6 +289,13 @@ Qué columna va en cada campo lo decide `metadatos.py`, con el JSON de
 Un campo con la plantilla vacía no se escribe y conserva lo que ya traiga el
 PDF; por ejemplo, el Productor que pone ocrmypdf.
 
+Los metadatos se escriben con pikepdf (`metadatos.py escribir`), que deja
+iguales el diccionario Info y el XMP, como exige PDF/A. Hasta la 1.0.10 se
+escribían con exiftool, que los dejaba distintos: esos PDF no pasan la
+validación PDF/A-3B (veraPDF, cláusula 6.6.2.3.1). En PDF/A, Asunto y
+Descripción ocupan el mismo lugar del XMP (`dc:description`): si Asunto tiene
+texto, Descripción no se escribe.
+
 Al final se muestra un resumen: exitosos, sin metadatos, en REVIEW, por
 reintentar y omitidos. El detalle queda en `logs/`.
 
@@ -289,6 +305,12 @@ reintentar y omitidos. El detalle queda en `logs/`.
   INPUT; se reprocesa en la siguiente ejecución.
 - **El OCR no genera el PDF:** se reintenta una vez; si vuelve a fallar, el
   libro queda en INPUT como "por reintentar".
+- **Tesseract no pudo leer una página** (se cayó en los tres intentos): esa
+  página entraría al PDF como imagen sin texto, así que el libro va a `REVIEW/`
+  con sus TIFF y el motivo dice qué páginas. Si esas páginas nunca van a tener
+  texto (en blanco, dañadas) y hay que entregarlo igual, desde la terminal:
+  `ACEPTAR_PAGINAS_SIN_OCR=1 bash main.sh --only-book <código>`. El libro sale
+  OK y el registro anota las páginas en `Detalle_Error`.
 - **Imágenes con DPI ≠ 300 o corruptas, o páginas que no coinciden:** el libro
   va a `REVIEW/` con el motivo en `review_log.csv`.
 - **Libro sin entrada en el CSV:** el PDF se entrega igual en

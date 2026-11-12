@@ -18,6 +18,13 @@
 #     → una línea por código: código y los valores de CAMPOS, separados por
 #       el carácter 0x1F (lo lee metadatos.sh)
 #
+#   python3 metadatos.py escribir --pdf libro.pdf   (línea del índice en META_LINEA)
+#     → escribe los campos en el PDF con pikepdf, sincronizando el diccionario
+#       Info y el XMP como exige PDF/A (exiftool los dejaba distintos y el PDF
+#       dejaba de ser PDF/A-3B válido). Asunto y Descripción comparten el mismo
+#       lugar del XMP (dc:description): si Asunto tiene texto, Descripción no se
+#       escribe.
+#
 #   meta.json: {"codigo": 1, "encabezado": false,
 #               "campos": {"Title": "{1}", "Subject": "…", …}}
 #   encabezado: true / false, o null para detectarlo
@@ -163,12 +170,52 @@ def revisar(filas, cfg):
     return codigos, len(vistos), avisos
 
 
+def escribir(ruta_pdf, valores):
+    """Escribe los campos no vacíos en el PDF, con Info y XMP iguales (PDF/A 6.6.2.3).
+    Correspondencias de PDF/A: Title↔dc:title, Author↔dc:creator, Subject↔dc:description,
+    Keywords↔pdf:Keywords, Creator↔xmp:CreatorTool, Producer↔pdf:Producer."""
+    import pikepdf
+    asunto = valores.get("Subject") or valores.get("Description") or ""
+    xmp = {
+        "dc:title": valores.get("Title"),
+        "dc:creator": [valores["Author"]] if valores.get("Author") else None,
+        "dc:description": asunto,
+        "pdf:Keywords": valores.get("Keywords"),
+        "xmp:CreatorTool": valores.get("Creator"),
+        "pdf:Producer": valores.get("Producer"),
+    }
+    with pikepdf.open(ruta_pdf, allow_overwriting_input=True) as pdf:
+        # set_pikepdf_as_editor=False: no reemplaza el Productor por «pikepdf»
+        with pdf.open_metadata(set_pikepdf_as_editor=False) as meta:
+            # Restos de exiftool que no corresponden a PDF/A (PDF ya entregados)
+            for clave in ("dc:subject", "pdf:Author"):
+                if clave in meta:
+                    del meta[clave]
+            for clave, valor in xmp.items():
+                if valor:              # plantilla vacía = se conserva lo que traiga el PDF
+                    meta[clave] = valor
+        version = max(pdf.pdf_version, "1.7")
+        pdf.save(ruta_pdf, min_version=version)
+
+
 def main():
     p = argparse.ArgumentParser(description="Índice de metadatos por código a partir del CSV")
-    p.add_argument("accion", choices=["indice"])
-    p.add_argument("--csv", required=True)
+    p.add_argument("accion", choices=["indice", "escribir"])
+    p.add_argument("--csv")
+    p.add_argument("--pdf", help="escribir: PDF a modificar (la línea del índice va en META_LINEA)")
     p.add_argument("--config", help="JSON con columna del código, encabezado y plantillas")
     a = p.parse_args()
+
+    if a.accion == "escribir":
+        import os
+        if not a.pdf:
+            p.error("escribir requiere --pdf")
+        partes = os.environ.get("META_LINEA", "").split(SEPARADOR)
+        valores = {campo: (partes[i + 1] if i + 1 < len(partes) else "") for i, (campo, _) in enumerate(CAMPOS)}
+        escribir(a.pdf, valores)
+        return 0
+    if not a.csv:
+        p.error("indice requiere --csv")
 
     config = {}
     if a.config:

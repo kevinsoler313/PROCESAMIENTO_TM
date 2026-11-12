@@ -26,6 +26,12 @@
 #       --entrega 6 --salida registro.csv [--book AR10582 --book …]
 #   python3 registro_ocr_icr.py agregar --registro-dir /mnt/datos/REGISTRO \
 #       --pdf OUTPUT/AR10582.pdf --tiff-dir INPUT/AR10582 [--entrega 6] [--hash …]
+#   python3 registro_ocr_icr.py actualizar --registro-dir /mnt/datos/REGISTRO \
+#       --pdf OUTPUT/AR10582.pdf [--hash …]
+#     → el PDF cambió (inyectar_metadatos.sh): en los registros del día donde
+#       esté el libro se corrigen PESO DE PDF y HASH; lo demás no se toca
+#   Con --sin-hash (CSV de entrega) la columna HASH queda vacía: es mucho más
+#   rápido, porque no hay que leer cada PDF completo.
 # =============================================================================
 
 import argparse
@@ -136,6 +142,49 @@ def agregar(registro_dir, nueva):
     return ruta
 
 
+def actualizar(registro_dir, codigo, bytes_pdf, hash_pdf):
+    """Corrige PESO DE PDF y HASH del libro en todos los registros del día donde
+    esté. Devuelve las rutas modificadas (vacía si el libro no estaba en ninguno)."""
+    import fcntl
+    col_peso, col_hash = ENCABEZADOS.index("PESO DE PDF"), ENCABEZADOS.index("HASH")
+    cambiados = []
+    for ruta in sorted(Path(registro_dir).glob("registro OCR-ICR *.csv")):
+        with open(ruta, "r+b") as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            filas = list(csv.reader(io.StringIO(f.read().decode("utf-8-sig"))))
+            tocado = False
+            for r in filas[1:]:
+                if r and r[0] == codigo and len(r) > col_hash:
+                    r[col_peso] = decimal_coma(bytes_pdf / 1024 ** 2)
+                    r[col_hash] = hash_pdf
+                    tocado = True
+            if not tocado:
+                continue
+            salida = io.StringIO()
+            csv.writer(salida, lineterminator="\r\n").writerows(filas)
+            f.seek(0)
+            f.truncate()
+            f.write(salida.getvalue().encode("utf-8-sig"))
+        cambiados.append(ruta)
+    return cambiados
+
+
+def main_actualizar(argv):
+    p = argparse.ArgumentParser(description="Corrige peso y hash de un PDF en los registros del día")
+    p.add_argument("--registro-dir", required=True)
+    p.add_argument("--pdf", required=True)
+    p.add_argument("--hash", help="SHA-256 del PDF, si ya se calculó")
+    a = p.parse_args(argv)
+    pdf = Path(a.pdf)
+    rutas = actualizar(a.registro_dir, pdf.stem, pdf.stat().st_size, a.hash or sha256(pdf))
+    for r in rutas:
+        print(r)
+    if not rutas:
+        print(f"{pdf.stem} no está en ningún registro OCR-ICR de {a.registro_dir}", file=sys.stderr)
+        return 3
+    return 0
+
+
 def main_agregar(argv):
     p = argparse.ArgumentParser(description="Agrega un PDF al registro OCR-ICR del día")
     p.add_argument("--registro-dir", required=True)
@@ -153,12 +202,16 @@ def main_agregar(argv):
 def main():
     if sys.argv[1:2] == ["agregar"]:
         return main_agregar(sys.argv[2:])
+    if sys.argv[1:2] == ["actualizar"]:
+        return main_actualizar(sys.argv[2:])
     p = argparse.ArgumentParser(description="CSV de registro OCR-ICR de una entrega")
     p.add_argument("--pdf-dir", required=True)
     p.add_argument("--tiff-dir", required=True)
     p.add_argument("--entrega", type=int, required=True, choices=list(ENTREGAS))
     p.add_argument("--salida", required=True)
     p.add_argument("--book", action="append", help="Solo estos libros (repetible)")
+    p.add_argument("--sin-hash", action="store_true",
+                   help="No calcular el SHA-256 (columna HASH vacía); mucho más rápido")
     a = p.parse_args()
 
     pdfs = libros_pdf(a.pdf_dir)
@@ -171,7 +224,8 @@ def main():
             sin_tiff.append(pdf.stem)
             continue
         n, peso_tiff = datos_tiff(carpeta)
-        filas.append(fila(pdf.stem, n, pdf.stat().st_size, peso_tiff, a.entrega, sha256(pdf)))
+        filas.append(fila(pdf.stem, n, pdf.stat().st_size, peso_tiff, a.entrega,
+                          "" if a.sin_hash else sha256(pdf)))
     escribir_csv(a.salida, filas)
     print(f"{len(filas)} libro(s) en {a.salida}", file=sys.stderr)
     if sin_tiff:
@@ -180,4 +234,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
