@@ -193,7 +193,7 @@ fila por cada PDF de la carpeta de PDF (solo la raíz).
 | CODIFICACION | Código del libro |
 | LIBRO | Parte numérica final del código, con sus ceros (`AHFDAP001` → `001`) |
 | # IMAGENES | TIFF en la carpeta del libro (`<código>` o `<código> OK`) |
-| PESO DE PDF | MB, con coma decimal |
+| PESO DE PDF | KB, como la columna Tamaño del Explorador de Windows (`190.003 KB`) |
 | PESO DE CARPETA TIFF | GB, con coma decimal |
 | FECHA | Día en que se genera (d/m/aaaa) |
 | ENTREGA | `ENTREGA 06` |

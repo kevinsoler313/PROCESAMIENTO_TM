@@ -1394,7 +1394,8 @@ class Ventana(QMainWindow):
         lay, _ = self._card("CREAR REGISTRO OCR-ICR", "Configuración previa")
         nota = QLabel("Se genera un CSV con una fila por cada PDF de la carpeta de PDF. De la carpeta de "
                       "TIFF del libro (con su mismo código) se toman el número de imágenes y el peso. "
-                      "PESO DE PDF va en MB y PESO DE CARPETA TIFF en GB; FECHA es la de hoy.",
+                      "PESO DE PDF va en KB, igual que la columna Tamaño del Explorador de Windows; PESO DE CARPETA "
+                      "TIFF en GB; FECHA es la de hoy.",
                       objectName="sub")
         nota.setWordWrap(True)
         lay.addWidget(nota)
@@ -1454,7 +1455,7 @@ class Ventana(QMainWindow):
 
         self.ocricr_tabla = QTableWidget(0, 7)
         self.ocricr_tabla.setHorizontalHeaderLabels(
-            ["", "Código", "Páginas PDF", "Imágenes TIFF", "Peso PDF (MB)", "Peso TIFF (GB)", "Estado"])
+            ["", "Código", "Páginas PDF", "Imágenes TIFF", "Peso PDF", "Peso TIFF (GB)", "Estado"])
         self.ocricr_tabla.verticalHeader().setVisible(False)
         self.ocricr_tabla.setSelectionMode(QTableWidget.NoSelection)
         self.ocricr_tabla.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -1822,7 +1823,7 @@ class Ventana(QMainWindow):
             chk.setCheckState(Qt.Checked)
             self.ocricr_tabla.setItem(fila, 0, chk)
             self.ocricr_tabla.setItem(fila, 1, QTableWidgetItem(libro["codigo"]))
-            textos = ["…", "…", RO.decimal_coma(libro["pdf"].stat().st_size / 1024 ** 2), "…", "leyendo…"]
+            textos = ["…", "…", RO.tamano_explorador(libro["pdf"].stat().st_size), "…", "leyendo…"]
             for col, texto in enumerate(textos, 2):
                 item = QTableWidgetItem(texto)
                 if col < 6:

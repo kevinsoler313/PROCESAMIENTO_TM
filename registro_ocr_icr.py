@@ -8,7 +8,9 @@
 #   CODIFICACION          código del libro (nombre del PDF)
 #   LIBRO                 parte numérica final del código, con sus ceros (AHFDAP001 → 001)
 #   # IMAGENES            número de TIFF en <carpeta TIFF>/<código>
-#   PESO DE PDF           MB (1 MB = 1024² bytes), coma decimal, 1 decimal
+#   PESO DE PDF           como la columna Tamaño del Explorador de Windows:
+#                         KB (1 KB = 1024 bytes) redondeado hacia arriba, con
+#                         punto de miles: 194.563.072 bytes → «190.003 KB»
 #   PESO DE CARPETA TIFF  GB (1 GB = 1024³ bytes), coma decimal, 1 decimal
 #   FECHA                 día en que se genera el CSV (d/m/aaaa)
 #   ENTREGA               ENTREGA 06 (dos dígitos)
@@ -93,6 +95,14 @@ def decimal_coma(valor):
     return texto.replace(".", ",")
 
 
+def tamano_explorador(nbytes):
+    """Como la columna Tamaño del Explorador de Windows: KB de 1024 bytes,
+    redondeado hacia arriba (1 byte → 1 KB), con punto de miles.
+    194563072 → '190.003 KB'."""
+    kb = -(-int(nbytes) // 1024)
+    return f"{kb:,} KB".replace(",", ".")
+
+
 def sha256(ruta, bloque=8 * 1024 * 1024):
     h = hashlib.sha256()
     with open(ruta, "rb") as f:
@@ -103,7 +113,7 @@ def sha256(ruta, bloque=8 * 1024 * 1024):
 
 def fila(codigo, imagenes, bytes_pdf, bytes_tiff, entrega, hash_pdf, fecha=None):
     fecha = fecha or date.today()
-    return [codigo, numero_libro(codigo), imagenes, decimal_coma(bytes_pdf / 1024 ** 2),
+    return [codigo, numero_libro(codigo), imagenes, tamano_explorador(bytes_pdf),
             decimal_coma(bytes_tiff / 1024 ** 3), f"{fecha.day}/{fecha.month}/{fecha.year}",
             f"ENTREGA {entrega:02d}" if entrega else "", hash_pdf, ""]
 
@@ -155,7 +165,7 @@ def actualizar(registro_dir, codigo, bytes_pdf, hash_pdf):
             tocado = False
             for r in filas[1:]:
                 if r and r[0] == codigo and len(r) > col_hash:
-                    r[col_peso] = decimal_coma(bytes_pdf / 1024 ** 2)
+                    r[col_peso] = tamano_explorador(bytes_pdf)
                     r[col_hash] = hash_pdf
                     tocado = True
             if not tocado:
