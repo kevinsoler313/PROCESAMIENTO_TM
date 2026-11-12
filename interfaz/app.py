@@ -1925,13 +1925,22 @@ class Ventana(QMainWindow):
             self.ocricr_aviso.setText("Sin carpeta de TIFF (desmárcalos o revisa la carpeta): "
                                       + ", ".join(sin_tiff[:5]) + (" …" if len(sin_tiff) > 5 else ""))
             return
-        distintos = [x["codigo"] for x in libros if x["paginas"] != x["imagenes"]]
+        distintos = [x for x in libros if x["paginas"] != x["imagenes"]]
         if distintos:
+            def detalle(x):
+                pdf = "no se pudo leer el PDF" if x["paginas"] is None else f'{x["paginas"]} páginas en el PDF'
+                return f'• {x["codigo"]}: {pdf} y {x["imagenes"]} imágenes TIFF'
+            if len(distintos) == 1:
+                texto = f'El libro {distintos[0]["codigo"]} no coincide:'
+            else:
+                texto = f"{len(distintos)} libros no coinciden:"
+            lineas = [detalle(x) for x in distintos[:15]]
+            if len(distintos) > 15:
+                lineas.append(f"… y {len(distintos) - 15} más")
             r = QMessageBox.question(
                 self, "Generar registro",
-                f"{len(distintos)} libro(s) tienen distinto número de páginas en el PDF que de imágenes "
-                "TIFF:\n" + ", ".join(distintos[:10]) + (" …" if len(distintos) > 10 else "")
-                + "\n\n¿Generar el CSV de todos modos?")
+                texto + "\n\n" + "\n".join(lineas) + "\n\n¿Deseas generar el CSV aun así?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
             if r != QMessageBox.Yes:
                 return
         self.ocricr_aviso.setText("")
