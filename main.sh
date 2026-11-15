@@ -405,6 +405,9 @@ with pikepdf.open(path, allow_overwriting_input=True) as pdf:
 
 plan_file() { printf '%s' "${TEMP_DIR}/$1/_plan.tsv"; }
 
+# Lista de TIFF congelada al hacer el plan (ruta, tamaño, fecha de modificación)
+lista_file() { printf '%s' "${TEMP_DIR}/$1/_lista_tiff.tsv"; }
+
 # PDF del libro, en orden y sin repetir
 plan_pdfs() { awk -F'\t' '!visto[$1]++ { print $1 }' "$(plan_file "$1")"; }
 
@@ -550,6 +553,20 @@ step5_metadata() {
 step6_verify_and_cleanup() {
     local book_name="$1" unidad="$2" final_pdf="$3"
     local dir t; dir=$(unidad_dir "$book_name" "$unidad"); t=$(etiqueta "$book_name" "$unidad")
+
+    # Las TIFF deben ser las mismas que al empezar el libro: ni nuevas, ni
+    # faltantes, ni modificadas. Si cambiaron, el PDF no se da por bueno.
+    local lista_msg lista_rc=0
+    lista_msg=$(python3 "$LIBROS_PY" revisar "${INPUT_DIR}/${book_name}" \
+                --lista "$(lista_file "$book_name")" 2>&1) || lista_rc=$?
+    if [[ $lista_rc -ne 0 ]]; then
+        [[ $lista_rc -eq 3 ]] || lista_msg="No se pudo comparar la lista de TIFF: ${lista_msg##*$'\n'}"
+        log_error "${t} ❌ ${lista_msg}. Enviando libro a REVIEW."
+        quarantine_book "$book_name" "$lista_msg"
+        echo "REVIEW"
+        return 0
+    fi
+    log_ok "${t} ✅ Las TIFF son las mismas que al empezar el libro."
 
     # TIFF originales de las carpetas de este PDF (excluyendo archivos de control _*)
     local -a carpetas; mapfile -t carpetas < <(plan_carpetas "$book_name" "$unidad")

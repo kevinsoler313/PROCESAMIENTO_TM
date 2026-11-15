@@ -11,7 +11,8 @@ Está pensado para Linux (probado en Ubuntu 26.04 y en WSL).
 ```
 INPUT/<libro>/*.tif
   └─ main.sh
-       1. Quita " OK" del nombre de la carpeta (solo al empezar ese libro)
+       1. Quita " OK" del nombre de la carpeta (solo al empezar ese libro) y
+          congela la lista de sus TIFF (nombre, tamaño y fecha)
        2. OCR.sh (vía run_ocr.sh)
             · preprocess_validate.py: DPI = 300 y sin imágenes corruptas,
               copia reducida de imágenes > 300 MB (el original no se toca)
@@ -19,7 +20,8 @@ INPUT/<libro>/*.tif
        3. Marca de agua (logo + texto)
        4. PDF/A-3B con ocrmypdf, cabecera PDF 1.7
        5. Metadatos desde el CSV (pikepdf: Info y XMP iguales, PDF/A válido)
-       6. Verifica: páginas del PDF == número de TIFF
+       6. Verifica: las TIFF siguen siendo las de la lista congelada y
+          páginas del PDF == número de TIFF
        7. Mueve el PDF a OUTPUT (o a OUTPUT/SIN METADATOS si el libro no
           está en el CSV), lo registra y recién entonces borra los TIFF
 ```

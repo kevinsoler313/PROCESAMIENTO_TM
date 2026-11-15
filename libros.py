@@ -35,6 +35,12 @@
 #       nombre_pdf <TAB> carpeta <TAB> archivo_de_orden <TAB> n_tiff
 #     (en modo «unico» todas las carpetas comparten el nombre del PDF)
 #     Código de salida 0 = plan listo · 2 = el libro va a REVIEW (motivo en stdout)
+#     Además deja _lista_tiff.tsv: TODAS las TIFF del libro (cualquier nivel) con
+#     su tamaño y fecha de modificación, tal como estaban al empezar el libro.
+#
+#   python3 libros.py revisar <carpeta_libro> --lista _lista_tiff.tsv
+#     Compara las TIFF de ahora con la lista congelada al empezar. Código 0 =
+#     iguales · 3 = cambiaron (qué cambió, en stdout): el PDF no se da por bueno.
 # =============================================================================
 
 import argparse
@@ -215,6 +221,44 @@ def plan(carpeta_libro, modo=""):
     return [(nombre_libro if modo == "unico" else n, por_nombre[n], lista) for n, lista in fragmentos]
 
 
+def lista_tiff(carpeta_libro):
+    """{ruta relativa: (bytes, mtime_ns)} de todas las TIFF del libro, a cualquier nivel."""
+    libro = Path(carpeta_libro)
+    lista = {}
+    for p in libro.rglob("*"):
+        if p.is_file() and es_tiff(p.name):
+            st = p.stat()
+            lista[p.relative_to(libro).as_posix()] = (st.st_size, st.st_mtime_ns)
+    return lista
+
+
+def escribir_lista(destino, lista):
+    Path(destino).write_text("".join(f"{r}\t{b}\t{m}\n" for r, (b, m) in sorted(lista.items())),
+                             encoding="utf-8")
+
+
+def leer_lista(origen):
+    lista = {}
+    for linea in Path(origen).read_text(encoding="utf-8").splitlines():
+        if linea:
+            r, b, m = linea.rsplit("\t", 2)
+            lista[r] = (int(b), int(m))
+    return lista
+
+
+def cambios(antes, ahora, maximo=5):
+    """Diferencias entre dos listas de TIFF, en palabras. Vacío = iguales."""
+    nuevas = sorted(set(ahora) - set(antes), key=clave_natural)
+    faltan = sorted(set(antes) - set(ahora), key=clave_natural)
+    distintas = sorted((r for r in set(antes) & set(ahora) if antes[r] != ahora[r]), key=clave_natural)
+    partes = []
+    for titulo, rutas in (("nuevas", nuevas), ("ya no están", faltan), ("modificadas", distintas)):
+        if rutas:
+            extra = f" (+{len(rutas) - maximo} más)" if len(rutas) > maximo else ""
+            partes.append(f"{len(rutas)} {titulo}: {', '.join(rutas[:maximo])}{extra}")
+    return "; ".join(partes)
+
+
 def resumen(carpeta_libro, modo="fragmentos"):
     """Para la interfaz: (fragmentos [(nombre, n_tiff)] en orden, motivo de error o None).
     Libro normal → ([], None)."""
@@ -235,11 +279,23 @@ def resumen(carpeta_libro, modo="fragmentos"):
 
 def main():
     p = argparse.ArgumentParser(description="Plan de un libro: qué PDF salen y con qué TIFF, en orden")
-    p.add_argument("accion", choices=["plan"])
+    p.add_argument("accion", choices=["plan", "revisar"])
     p.add_argument("carpeta")
     p.add_argument("--modo", default="", choices=["", "unico", "fragmentos"])
-    p.add_argument("--salida", required=True, help="plan.tsv; los archivos de orden van a su lado")
+    p.add_argument("--salida", help="plan.tsv; los archivos de orden y la lista de TIFF van a su lado")
+    p.add_argument("--lista", help="revisar: _lista_tiff.tsv que dejó el plan")
     a = p.parse_args()
+
+    if a.accion == "revisar":
+        if not a.lista:
+            p.error("revisar necesita --lista")
+        diferencia = cambios(leer_lista(a.lista), lista_tiff(a.carpeta))
+        if diferencia:
+            print(f"Las TIFF del libro cambiaron durante el procesamiento: {diferencia}")
+            return 3
+        return 0
+    if not a.salida:
+        p.error("plan necesita --salida")
 
     try:
         unidades = plan(a.carpeta, a.modo)
@@ -248,6 +304,7 @@ def main():
         return 2
     salida = Path(a.salida)
     salida.parent.mkdir(parents=True, exist_ok=True)
+    escribir_lista(salida.parent / "_lista_tiff.tsv", lista_tiff(a.carpeta))
     lineas = []
     for i, (pdf, carpeta, lista) in enumerate(unidades):
         orden = salida.parent / f"_orden_{i:03d}.txt"
