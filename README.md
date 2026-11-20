@@ -150,8 +150,13 @@ una barra lateral:
     y libros en paralelo, que se puede ajustar a mano.
 - **Inyectar metadatos:** lista los PDF de `OUTPUT/SIN METADATOS` y, con un CSV
   que puede ser distinto al del procesamiento, les escribe los metadatos a los
-  que estén, los pasa a OUTPUT y actualiza el registro a `OK`; avisa cuáles
-  siguen sin aparecer. Usa las carpetas de Procesamiento › CARPETAS DE TRABAJO.
+  marcados que estén, los pasa a OUTPUT y actualiza el registro a `OK`; avisa
+  cuáles siguen sin aparecer. Con **Carpeta de PDF › Elegir…** se toma otra
+  carpeta (p. ej. OUTPUT) para volver a escribir los metadatos de libros ya
+  entregados: ahí vienen sin marcar, se reescriben en su sitio (sobre una copia
+  que reemplaza al original solo si sale bien) y el registro y el registro
+  OCR-ICR se actualizan con el SHA-256 y el peso nuevos. El botón
+  **SIN METADATOS** vuelve a la carpeta por defecto.
 - **Crear contenedores GDOC:** genera el Excel (.xls) para importar contenedores en GDOC
   (ver abajo). Se eligen la carpeta de PDF (por defecto OUTPUT), la entrega
   (ENTREGA 01 a 99) y los libros.
@@ -164,6 +169,9 @@ una barra lateral:
 
 La versión se ve en el título de la ventana y al pie de la barra, junto a la
 sede.
+
+La rueda del ratón solo desplaza la página: nunca cambia una lista, un
+número, un deslizador ni una pestaña.
 
 Tiene modo oscuro (predeterminado) y claro, con el sistema visual de
 `DESIGN.md` adaptado a los colores de TechnoMart. Cada selección se guarda en
@@ -323,6 +331,7 @@ Para los PDF que quedaron en `OUTPUT/SIN METADATOS`:
 ```bash
 bash inyectar_metadatos.sh --csv otro.csv                      # los que estén en otro.csv
 bash inyectar_metadatos.sh --csv otro.csv --book AR10611       # solo ese libro
+bash inyectar_metadatos.sh --csv m.csv --pdf-dir /mnt/datos/OUTPUT --book AR10611   # reinyectar uno ya entregado
 ```
 
 `metadatos.sh` reúne la lectura del CSV y la escritura de metadatos; lo usan

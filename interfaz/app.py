@@ -22,15 +22,15 @@ import threading
 from pathlib import Path
 
 import psutil
-from PySide6.QtCore import (QBuffer, QByteArray, QIODevice, QObject, QSettings, QSize, Qt, QTimer, QUrl,
+from PySide6.QtCore import (QBuffer, QByteArray, QEvent, QIODevice, QObject, QSettings, QSize, Qt, QTimer, QUrl,
                             Signal)
 from PySide6.QtGui import QColor, QDesktopServices, QFont, QFontDatabase, QIcon, QPalette, QPixmap
 from PySide6.QtPdf import QPdfDocument
 from PySide6.QtWidgets import (
-    QApplication, QButtonGroup, QCheckBox, QComboBox, QMenu, QFileDialog, QFrame, QGridLayout, QHBoxLayout,
+    QAbstractScrollArea, QAbstractSpinBox, QApplication, QButtonGroup, QCheckBox, QComboBox, QMenu, QFileDialog, QFrame, QGridLayout, QHBoxLayout,
     QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit,
     QProgressBar, QPushButton, QRadioButton, QScrollArea, QSlider, QSpinBox, QStackedWidget, QTabWidget, QTableWidget,
-    QTableWidgetItem, QVBoxLayout, QWidget,
+    QTabBar, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -493,6 +493,23 @@ class SelectorEntrega(QSpinBox):
 
     def currentData(self):
         return self.value()
+
+
+class SinRueda(QObject):
+    """La rueda del ratón nunca cambia una selección (listas, números, deslizadores,
+    pestañas): sobre ellos solo desplaza la página, como si no estuvieran ahí."""
+
+    TIPOS = (QComboBox, QAbstractSpinBox, QSlider, QTabBar)
+
+    def eventFilter(self, obj, evento):
+        if evento.type() == QEvent.Wheel and isinstance(obj, self.TIPOS):
+            w = obj.parentWidget()
+            while w is not None and not isinstance(w, QAbstractScrollArea):
+                w = w.parentWidget()
+            if w is not None:
+                QApplication.sendEvent(w.viewport(), evento)
+            return True
+        return False
 
 
 class ComboCompleto(QComboBox):
@@ -1516,12 +1533,26 @@ class Ventana(QMainWindow):
     def _seccion_metadatos(self):
         """PDF que quedaron sin metadatos (OUTPUT/SIN METADATOS) + un CSV, que puede
         ser distinto al del procesamiento: inyecta los que estén y avisa los que no."""
-        lay, fila = self._card("INYECTAR METADATOS", "PDF sin metadatos")
-        nota = QLabel(f"Los libros que no estaban en el CSV se entregan en OUTPUT/{SIN_META_SUBDIR}. "
-                      "Elige un CSV que los incluya: a los que aparezcan se les escriben los metadatos "
-                      "y pasan a OUTPUT; los demás se quedan y se listan abajo.", objectName="sub")
-        nota.setWordWrap(True)
-        lay.addWidget(nota)
+        lay, fila = self._card("INYECTAR METADATOS", "PDF a los que se les escriben los metadatos")
+        self.iny_nota = QLabel(objectName="sub")
+        self.iny_nota.setWordWrap(True)
+        lay.addWidget(self.iny_nota)
+        fila_c = QHBoxLayout()
+        fila_c.setSpacing(12)
+        etiqueta = QLabel("Carpeta de PDF", objectName="subtitulo")
+        etiqueta.setToolTip(f"Por defecto OUTPUT/{SIN_META_SUBDIR}. Elige otra (p. ej. OUTPUT) para\n"
+                            "volver a escribir los metadatos de libros ya entregados.")
+        fila_c.addWidget(etiqueta)
+        self.iny_campo = QLineEdit(readOnly=True)
+        fila_c.addWidget(self.iny_campo, 1)
+        b = QPushButton("Elegir…")
+        b.clicked.connect(self._iny_elegir)
+        fila_c.addWidget(b)
+        b = QPushButton(SIN_META_SUBDIR)
+        b.setToolTip(f"Volver a OUTPUT/{SIN_META_SUBDIR}")
+        b.clicked.connect(lambda: (self.ajustes.setValue("iny_pdf", ""), self.refrescar_sin_meta()))
+        fila_c.addWidget(b)
+        lay.addLayout(fila_c)
         tarjeta_pdf = lay.parentWidget()
         self.meta_iny = PanelMetadatos(self, "INYECTAR METADATOS", "CSV para inyectar", "csv_inyectar",
                                        "meta_config_inyectar", cfg_inicial=self.meta.cfg)
@@ -1530,28 +1561,35 @@ class Ventana(QMainWindow):
         self.col.addWidget(tarjeta_pdf)
 
         cab = QHBoxLayout()
-        self.iny_titulo = QLabel(objectName="sub")
-        cab.addWidget(self.iny_titulo)
-        cab.addStretch()
-        b = QPushButton("Abrir carpeta")
-        b.clicked.connect(lambda: self.abrir(self.carpetas["output"] / SIN_META_SUBDIR))
-        cab.addWidget(b)
-        b = QPushButton("Actualizar")
-        b.clicked.connect(self.refrescar_sin_meta)
-        cab.addWidget(b)
+        self.iny_buscar = QLineEdit()
+        self.iny_buscar.setPlaceholderText("Buscar libro, p. ej. AHFCPC")
+        self.iny_buscar.setClearButtonEnabled(True)
+        self.iny_buscar.textChanged.connect(self._iny_filtrar)
+        cab.addWidget(self.iny_buscar, 1)
+        for texto, accion in (("Todos", lambda: self._iny_marcar(True)),
+                              ("Ninguno", lambda: self._iny_marcar(False)),
+                              ("Abrir carpeta", lambda: self.abrir(self._iny_carpeta())),
+                              ("Actualizar", self.refrescar_sin_meta)):
+            b = QPushButton(texto)
+            b.clicked.connect(accion)
+            cab.addWidget(b)
         lay.addLayout(cab)
+        self.iny_titulo = QLabel(objectName="sub")
+        lay.addWidget(self.iny_titulo)
 
-        self.iny_tabla = QTableWidget(0, 3)
-        self.iny_tabla.setHorizontalHeaderLabels(["Libro", "Tamaño", "En el CSV elegido"])
+        self.iny_tabla = QTableWidget(0, 4)
+        self.iny_tabla.setHorizontalHeaderLabels(["", "Libro", "Tamaño", "En el CSV elegido"])
         self.iny_tabla.verticalHeader().setVisible(False)
         self.iny_tabla.setSelectionMode(QTableWidget.NoSelection)
         self.iny_tabla.setEditTriggers(QTableWidget.NoEditTriggers)
         self.iny_tabla.setFocusPolicy(Qt.NoFocus)
         h = self.iny_tabla.horizontalHeader()
-        h.setSectionResizeMode(0, QHeaderView.Stretch)
-        h.setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        h.setSectionResizeMode(2, QHeaderView.Fixed)
-        self.iny_tabla.setColumnWidth(2, 210)
+        h.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        h.setSectionResizeMode(1, QHeaderView.Stretch)
+        h.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        h.setSectionResizeMode(3, QHeaderView.Fixed)
+        self.iny_tabla.setColumnWidth(3, 210)
+        self.iny_tabla.itemChanged.connect(self._iny_titulo)
         self.iny_tabla.verticalHeader().setDefaultSectionSize(34)
         self.iny_tabla.setMinimumHeight(200)
         lay.addWidget(self.iny_tabla)
@@ -2018,27 +2056,59 @@ class Ventana(QMainWindow):
     def cargar_csv_inyectar(self, ruta):
         self.meta_iny.cargar(ruta, avisar=False)
 
+    def _iny_sin_meta(self):
+        return self.carpetas["output"] / SIN_META_SUBDIR
+
+    def _iny_carpeta(self):
+        """Carpeta elegida para inyectar; por defecto OUTPUT/SIN METADATOS."""
+        return Path(self.ajustes.value("iny_pdf", "") or self._iny_sin_meta())
+
+    def _iny_es_sin_meta(self):
+        return os.path.realpath(self._iny_carpeta()) == os.path.realpath(self._iny_sin_meta())
+
+    def _iny_elegir(self):
+        ruta = QFileDialog.getExistingDirectory(self, "Carpeta de PDF", str(self._existente(self._iny_carpeta())))
+        if ruta:
+            self.ajustes.setValue("iny_pdf", "" if os.path.realpath(ruta) == os.path.realpath(
+                self._iny_sin_meta()) else ruta)
+            self.refrescar_sin_meta()
+
     def refrescar_sin_meta(self):
-        """Lista los PDF de OUTPUT/SIN METADATOS y si están en el CSV elegido."""
-        carpeta = self.carpetas["output"] / SIN_META_SUBDIR
+        """Lista los PDF de la carpeta elegida y si están en el CSV elegido. En SIN METADATOS
+        vienen todos marcados; en otra carpeta (libros ya entregados), ninguno."""
+        carpeta = self._iny_carpeta()
+        sin_meta = self._iny_es_sin_meta()
+        self.iny_campo.setText(str(carpeta))
+        if sin_meta:
+            self.iny_nota.setText(
+                f"Los libros que no estaban en el CSV se entregan en OUTPUT/{SIN_META_SUBDIR}. Elige un CSV "
+                "que los incluya: a los marcados que aparezcan se les escriben los metadatos y pasan a OUTPUT; "
+                "los demás se quedan.")
+        else:
+            self.iny_nota.setText(
+                "Los PDF marcados que estén en el CSV se reescriben con los metadatos nuevos en esta misma "
+                "carpeta (no se mueven) y su registro se actualiza con el SHA-256 y el peso nuevos.")
         try:
-            pdfs = sorted(p for p in carpeta.iterdir() if p.suffix.lower() == ".pdf")
+            pdfs = sorted(p for p in carpeta.iterdir() if p.is_file() and p.suffix.lower() == ".pdf")
         except OSError:
             pdfs = []
+        self.iny_tabla.blockSignals(True)
         self.iny_tabla.setRowCount(0)
-        estan = 0
         for pdf in pdfs:
             fila = self.iny_tabla.rowCount()
             self.iny_tabla.insertRow(fila)
-            self.iny_tabla.setItem(fila, 0, QTableWidgetItem(pdf.stem))
+            chk = QTableWidgetItem()
+            chk.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)
+            chk.setCheckState(Qt.Checked if sin_meta else Qt.Unchecked)
+            self.iny_tabla.setItem(fila, 0, chk)
+            self.iny_tabla.setItem(fila, 1, QTableWidgetItem(pdf.stem))
             peso = QTableWidgetItem(formato_gb(pdf.stat().st_size))
             peso.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            self.iny_tabla.setItem(fila, 1, peso)
+            self.iny_tabla.setItem(fila, 2, peso)
             if self.meta_iny.codigos is None:
                 estado = pill("Elige el CSV", "gris")
             elif pdf.stem in self.meta_iny.codigos:
-                estado = pill("Está: se inyectará", "ok")
-                estan += 1
+                estado = pill("Está en el CSV", "ok")
             else:
                 estado = pill("No está en este CSV", "warn")
             celda = QWidget()
@@ -2046,14 +2116,40 @@ class Ventana(QMainWindow):
             hc.setContentsMargins(6, 4, 6, 4)
             hc.addWidget(estado)
             hc.addStretch()
-            self.iny_tabla.setCellWidget(fila, 2, celda)
-        if not pdfs:
-            self.iny_titulo.setText(f"No hay PDF en {carpeta}")
-        elif self.meta_iny.codigos is None:
-            self.iny_titulo.setText(f"{len(pdfs)} PDF sin metadatos")
+            self.iny_tabla.setCellWidget(fila, 3, celda)
+        self.iny_tabla.blockSignals(False)
+        self._iny_filtrar()
+
+    def _iny_filtrar(self, *_):
+        texto = self.iny_buscar.text().strip().upper()
+        for fila in range(self.iny_tabla.rowCount()):
+            codigo = self.iny_tabla.item(fila, 1).text().upper()
+            self.iny_tabla.setRowHidden(fila, bool(texto) and texto not in codigo)
+        self._iny_titulo()
+
+    def _iny_marcar(self, marcar):
+        self.iny_tabla.blockSignals(True)
+        for fila in range(self.iny_tabla.rowCount()):
+            if not self.iny_tabla.isRowHidden(fila):
+                self.iny_tabla.item(fila, 0).setCheckState(Qt.Checked if marcar else Qt.Unchecked)
+        self.iny_tabla.blockSignals(False)
+        self._iny_titulo()
+
+    def _iny_seleccion(self):
+        return [self.iny_tabla.item(i, 1).text() for i in range(self.iny_tabla.rowCount())
+                if self.iny_tabla.item(i, 0).checkState() == Qt.Checked]
+
+    def _iny_titulo(self, *_):
+        total = self.iny_tabla.rowCount()
+        if not total:
+            self.iny_titulo.setText(f"No hay PDF en {self._iny_carpeta()}")
         else:
-            self.iny_titulo.setText(f"{len(pdfs)} PDF sin metadatos · {estan} están en el CSV elegido · "
-                                    f"{len(pdfs) - estan} no están")
+            marcados = self._iny_seleccion()
+            texto = f"{len(marcados)} de {total} PDF marcados"
+            if self.meta_iny.codigos is not None:
+                estan = sum(1 for n in marcados if n in self.meta_iny.codigos)
+                texto += f" · {estan} de los marcados están en el CSV elegido"
+            self.iny_titulo.setText(texto)
         self._estado_inyectar()
 
     def _estado_inyectar(self):
@@ -2067,17 +2163,29 @@ class Ventana(QMainWindow):
         if self.meta_iny.codigos is None:
             self.iny_aviso.setText("Falta elegir el CSV para inyectar.")
             return
+        marcados = self._iny_seleccion()
+        if not marcados:
+            self.iny_aviso.setText("Marca al menos un PDF.")
+            return
         self.iny_aviso.setText("")
-        r = QMessageBox.question(
-            self, "Inyectar metadatos",
-            "A los PDF que estén en el CSV se les escribirán los metadatos y pasarán a OUTPUT; "
-            "el registro se actualiza a OK.\nLos que no estén se quedan en "
-            f"{SIN_META_SUBDIR}.\n¿Continuar?")
+        carpeta = self._iny_carpeta()
+        if self._iny_es_sin_meta():
+            texto = ("A los PDF marcados que estén en el CSV se les escribirán los metadatos y pasarán a "
+                     f"OUTPUT; el registro se actualiza a OK.\nLos que no estén se quedan en {SIN_META_SUBDIR}.")
+        else:
+            texto = (f"Se reescribirán los metadatos de {len(marcados)} PDF marcados de\n{carpeta}\n"
+                     "(los que estén en el CSV). Quedan en esa carpeta, y el registro se actualiza con el "
+                     "SHA-256 y el peso nuevos.")
+        r = QMessageBox.question(self, "Inyectar metadatos", texto + "\n¿Continuar?")
         if r != QMessageBox.Yes:
             return
         args = ["--csv", self.meta_iny.ruta, "--meta-config", self.meta_iny.escribir_json(META_JSON_INY),
                 "--output-dir", str(self.carpetas["output"]),
-                "--registro-dir", str(self.carpetas["registro"])]
+                "--registro-dir", str(self.carpetas["registro"]),
+                "--pdf-dir", str(carpeta)]
+        for libro in marcados:
+            args += ["--book", libro]
+        self.iny_movidos = self._iny_es_sin_meta()
         self.iny_log.clear()
         self.iny_resultado.setText("")
         self.iny_resultados_txt = None
@@ -2110,7 +2218,8 @@ class Ventana(QMainWindow):
                 falta.append(libro)
             else:
                 error.append(f"{libro} ({motivo})")
-        partes = [f"✓ {len(ok)} con metadatos inyectados (ya están en OUTPUT)."]
+        donde = "ya están en OUTPUT" if getattr(self, "iny_movidos", True) else "reescritos en su carpeta"
+        partes = [f"✓ {len(ok)} con metadatos inyectados ({donde})."]
         if falta:
             partes.append(f"⚠ {len(falta)} siguen sin entrada en el CSV: {', '.join(falta)}")
         if error:
@@ -3052,6 +3161,8 @@ def main():
     fuente.setFamilies(FUENTE_TEXTO)
     fuente.setPixelSize(13)
     app.setFont(fuente)
+    sin_rueda = SinRueda(app)
+    app.installEventFilter(sin_rueda)
     ventana = Ventana()
     ventana.show()
     sys.exit(app.exec())

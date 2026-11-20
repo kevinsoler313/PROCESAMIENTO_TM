@@ -10,11 +10,16 @@
 #             · si no está → lo deja donde está y lo reporta
 #           No necesita los TIFF ni repite el OCR.
 #
+#           Con --pdf-dir se toma otra carpeta (p. ej. OUTPUT, para corregir
+#           metadatos de libros ya entregados): ahí el PDF se reescribe en su
+#           sitio, sin moverlo, y el registro se actualiza igual.
+#
 # USO:
 #   bash inyectar_metadatos.sh --csv metadatos.csv
 #   bash inyectar_metadatos.sh --csv metadatos.csv --book AR10611 --book XTEST01
 #   bash inyectar_metadatos.sh --csv m.csv --output-dir /datos/OUT --registro-dir /datos/REGISTRO
 #   bash inyectar_metadatos.sh --csv m.csv --meta-config meta.json   # columnas → campos
+#   bash inyectar_metadatos.sh --csv m.csv --pdf-dir /datos/OUTPUT --book AR10611   # reinyectar
 #
 # SALIDA: logs/inyeccion_<ts>.txt con una línea ESTADO|libro|motivo por PDF
 #         (OK, FALTA = no está en el CSV, ERROR)
@@ -30,6 +35,7 @@ source "${SCRIPT_DIR}/metadatos.sh"
 CSV_META=""
 OUTPUT_DIR="/mnt/datos/OUTPUT"
 REGISTRO_DIR=""            # vacío = REGISTRO junto a OUTPUT, como en la interfaz
+PDF_DIR=""                 # vacío = OUTPUT/SIN METADATOS
 declare -a SOLO=()
 LOG_DIR="${SCRIPT_DIR}/logs"
 LOG="${LOG_DIR}/inyeccion_${TIMESTAMP}.log"
@@ -47,6 +53,7 @@ while [[ $# -gt 0 ]]; do
         --csv)          CSV_META="$2"; shift 2 ;;
         --output-dir)   OUTPUT_DIR="$2"; shift 2 ;;
         --registro-dir) REGISTRO_DIR="$2"; shift 2 ;;
+        --pdf-dir)      PDF_DIR="$2"; shift 2 ;;
         --book)         SOLO+=("$2"); shift 2 ;;
         --meta-config)  META_CONFIG="$2"; shift 2 ;;
         -h|--help)      usage; exit 0 ;;
@@ -56,6 +63,11 @@ done
 
 [[ -n "$REGISTRO_DIR" ]] || REGISTRO_DIR="$(dirname "$OUTPUT_DIR")/REGISTRO"
 SIN_META_DIR="${OUTPUT_DIR}/${SIN_META_SUBDIR}"
+[[ -n "$PDF_DIR" ]] || PDF_DIR="$SIN_META_DIR"
+# Desde SIN METADATOS el PDF pasa a OUTPUT; desde cualquier otra carpeta se reescribe en su sitio
+MOVER=0
+[[ "$(realpath -m "$PDF_DIR")" == "$(realpath -m "$SIN_META_DIR")" ]] && MOVER=1
+[[ -d "$PDF_DIR" ]] || { _log ERROR "No existe la carpeta de PDF: $PDF_DIR"; exit 1; }
 REGISTRO_CSV="${REGISTRO_DIR}/registro_libros_procesados.csv"
 
 # Los metadatos se escriben con pikepdf, que está en ocr_env (la interfaz no
@@ -76,14 +88,18 @@ trap 'rm -f "$INDICE"' EXIT
 meta_indice "$CSV_META" > "$INDICE"
 [[ -s "$INDICE" ]] || { _log ERROR "El CSV no tiene códigos válidos: $CSV_META"; exit 1; }
 _log INFO "CSV: $(basename "$CSV_META") ($(cut -d"$META_SEP" -f1 "$INDICE" | sort -u | wc -l) códigos)"
-_log INFO "PDF sin metadatos: $SIN_META_DIR"
+if [[ $MOVER -eq 1 ]]; then
+    _log INFO "PDF sin metadatos: $PDF_DIR"
+else
+    _log INFO "PDF a reinyectar (se reescriben en su carpeta): $PDF_DIR"
+fi
 _log INFO "Resultados de esta ejecución: $RESULTADOS"
 : > "$RESULTADOS"
 
 # Actualiza la línea del libro en el registro: estado OK, SHA-256 y peso nuevos;
 # conserva páginas y peso de la carpeta de TIFF (que ya no existe)
 actualizar_registro() {
-    local libro="$1" pdf="$2"
+    local libro="$1" pdf="$2" detalle="$3"
     local peso sha fecha prev paginas peso_carpeta
     peso=$(du -sb "$pdf" | awk '{printf "%.2f", $1/1048576}' | tr ',' '.')
     sha=$(sha256sum "$pdf" | awk '{print $1}')
@@ -103,7 +119,7 @@ actualizar_registro() {
     # Quitar la línea anterior del libro (comparación exacta, sin regex) y anexar la nueva
     awk -F'|' -v c="$libro" '$1!=c' "$REGISTRO_CSV" > "${REGISTRO_CSV}.tmp" && mv "${REGISTRO_CSV}.tmp" "$REGISTRO_CSV"
     printf '%s|%s|%s|%s|%s|%s|%s|%s\n' "$libro" "${paginas:-?}" "$peso_carpeta" "$peso" "OK" "$fecha" "$sha" \
-        "Metadatos inyectados después ($(basename "$CSV_META"))" >> "$REGISTRO_CSV"
+        "${detalle} ($(basename "$CSV_META"))" >> "$REGISTRO_CSV"
 
     # El PDF cambió: su fila en el registro OCR-ICR del día en que se procesó
     # (puede ser otro día) también lleva el peso y el hash nuevos
@@ -120,31 +136,49 @@ actualizar_registro() {
 
 ok=0; falta=0; error=0
 shopt -s nullglob
-for pdf in "$SIN_META_DIR"/*.pdf; do
+for pdf in "$PDF_DIR"/*.pdf; do
     libro="$(basename "${pdf%.pdf}")"
     if [[ ${#SOLO[@]} -gt 0 ]] && ! printf '%s\n' "${SOLO[@]}" | grep -qxF "$libro"; then
         continue
     fi
     meta=$(meta_buscar "$libro" "$INDICE")
     if [[ -z "$meta" ]]; then
-        _log WARN "[${libro}] No está en el CSV — sigue en ${SIN_META_SUBDIR}."
+        _log WARN "[${libro}] No está en el CSV — no se toca."
         echo "FALTA|${libro}|No está en $(basename "$CSV_META")" >> "$RESULTADOS"
         falta=$((falta + 1)); continue
     fi
-    destino="${OUTPUT_DIR}/${libro}.pdf"
-    if [[ -e "$destino" ]]; then
-        _log ERROR "[${libro}] Ya existe ${destino}; no se sobrescribe."
-        echo "ERROR|${libro}|Ya existe un PDF con ese nombre en OUTPUT" >> "$RESULTADOS"
-        error=$((error + 1)); continue
+    if [[ $MOVER -eq 1 ]]; then
+        destino="${OUTPUT_DIR}/${libro}.pdf"
+        if [[ -e "$destino" ]]; then
+            _log ERROR "[${libro}] Ya existe ${destino}; no se sobrescribe."
+            echo "ERROR|${libro}|Ya existe un PDF con ese nombre en OUTPUT" >> "$RESULTADOS"
+            error=$((error + 1)); continue
+        fi
+        if ! meta_escribir "$libro" "$pdf" "$meta" || ! pdfinfo "$pdf" >/dev/null 2>&1; then
+            _log ERROR "[${libro}] no se pudieron escribir los metadatos."
+            echo "ERROR|${libro}|no se pudieron escribir los metadatos" >> "$RESULTADOS"
+            error=$((error + 1)); continue
+        fi
+        mv "$pdf" "$destino"
+        actualizar_registro "$libro" "$destino" "Metadatos inyectados después"
+        _log OK "[${libro}] Metadatos inyectados → OUTPUT/${libro}.pdf"
+    else
+        # PDF ya entregado: se trabaja sobre una copia y solo si sale bien
+        # reemplaza al original (con el mismo número de páginas)
+        copia="${pdf%.pdf}.reinyectando.tmp"
+        paginas_antes=$(pdfinfo "$pdf" 2>/dev/null | awk '/^Pages:/{print $2}' || true)
+        if ! cp -p "$pdf" "$copia" || ! meta_escribir "$libro" "$copia" "$meta" \
+           || [[ "$(pdfinfo "$copia" 2>/dev/null | awk '/^Pages:/{print $2}')" != "$paginas_antes" ]] \
+           || [[ -z "$paginas_antes" ]]; then
+            rm -f "$copia"
+            _log ERROR "[${libro}] no se pudieron escribir los metadatos; el PDF queda como estaba."
+            echo "ERROR|${libro}|no se pudieron escribir los metadatos" >> "$RESULTADOS"
+            error=$((error + 1)); continue
+        fi
+        mv -f "$copia" "$pdf"
+        actualizar_registro "$libro" "$pdf" "Metadatos reinyectados"
+        _log OK "[${libro}] Metadatos reinyectados en ${pdf}"
     fi
-    if ! meta_escribir "$libro" "$pdf" "$meta" || ! pdfinfo "$pdf" >/dev/null 2>&1; then
-        _log ERROR "[${libro}] no se pudieron escribir los metadatos."
-        echo "ERROR|${libro}|no se pudieron escribir los metadatos" >> "$RESULTADOS"
-        error=$((error + 1)); continue
-    fi
-    mv "$pdf" "$destino"
-    actualizar_registro "$libro" "$destino"
-    _log OK "[${libro}] Metadatos inyectados → OUTPUT/${libro}.pdf"
     echo "OK|${libro}|" >> "$RESULTADOS"
     ok=$((ok + 1))
 done
