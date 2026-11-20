@@ -12,7 +12,9 @@
 #
 #           Con --pdf-dir se toma otra carpeta (p. ej. OUTPUT, para corregir
 #           metadatos de libros ya entregados): ahí el PDF se reescribe en su
-#           sitio, sin moverlo, y el registro se actualiza igual.
+#           sitio, sin moverlo, y el registro se actualiza igual. El trabajo se
+#           hace en una copia en TEMPORALES (disco local): el PDF se lee una vez
+#           y se escribe una vez, aunque esté en una carpeta de red.
 #
 # USO:
 #   bash inyectar_metadatos.sh --csv metadatos.csv
@@ -36,6 +38,7 @@ CSV_META=""
 OUTPUT_DIR="/mnt/datos/OUTPUT"
 REGISTRO_DIR=""            # vacío = REGISTRO junto a OUTPUT, como en la interfaz
 PDF_DIR=""                 # vacío = OUTPUT/SIN METADATOS
+TEMP_BASE=""               # vacío = TEMPORALES junto a OUTPUT, como en la interfaz
 declare -a SOLO=()
 LOG_DIR="${SCRIPT_DIR}/logs"
 LOG="${LOG_DIR}/inyeccion_${TIMESTAMP}.log"
@@ -54,6 +57,7 @@ while [[ $# -gt 0 ]]; do
         --output-dir)   OUTPUT_DIR="$2"; shift 2 ;;
         --registro-dir) REGISTRO_DIR="$2"; shift 2 ;;
         --pdf-dir)      PDF_DIR="$2"; shift 2 ;;
+        --temp-dir)     TEMP_BASE="$2"; shift 2 ;;
         --book)         SOLO+=("$2"); shift 2 ;;
         --meta-config)  META_CONFIG="$2"; shift 2 ;;
         -h|--help)      usage; exit 0 ;;
@@ -62,6 +66,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -n "$REGISTRO_DIR" ]] || REGISTRO_DIR="$(dirname "$OUTPUT_DIR")/REGISTRO"
+[[ -n "$TEMP_BASE" ]] || TEMP_BASE="$(dirname "$OUTPUT_DIR")/TEMPORALES"
 SIN_META_DIR="${OUTPUT_DIR}/${SIN_META_SUBDIR}"
 [[ -n "$PDF_DIR" ]] || PDF_DIR="$SIN_META_DIR"
 # Desde SIN METADATOS el PDF pasa a OUTPUT; desde cualquier otra carpeta se reescribe en su sitio
@@ -84,7 +89,13 @@ done
 [[ -f "$CSV_META" ]] || { _log ERROR "Falta el CSV de metadatos (--csv): ${CSV_META:-sin indicar}"; exit 1; }
 
 INDICE="$(mktemp)"
-trap 'rm -f "$INDICE"' EXIT
+TRABAJO=""        # copia local de trabajo (reinyectar)
+COPIA_RED=""      # copia que se está subiendo junto al original
+trap 'rm -f "$INDICE"; [[ -n "$TRABAJO" ]] && rm -rf "$TRABAJO"; [[ -n "$COPIA_RED" ]] && rm -f "$COPIA_RED"' EXIT
+if [[ $MOVER -eq 0 ]]; then
+    mkdir -p "$TEMP_BASE" && TRABAJO="$(mktemp -d "${TEMP_BASE}/_reinyectar_XXXXXX")" \
+        || { _log ERROR "No se pudo crear la carpeta de trabajo en $TEMP_BASE"; exit 1; }
+fi
 meta_indice "$CSV_META" > "$INDICE"
 [[ -s "$INDICE" ]] || { _log ERROR "El CSV no tiene códigos válidos: $CSV_META"; exit 1; }
 _log INFO "CSV: $(basename "$CSV_META") ($(cut -d"$META_SEP" -f1 "$INDICE" | sort -u | wc -l) códigos)"
@@ -99,17 +110,19 @@ _log INFO "Resultados de esta ejecución: $RESULTADOS"
 # Actualiza la línea del libro en el registro: estado OK, SHA-256 y peso nuevos;
 # conserva páginas y peso de la carpeta de TIFF (que ya no existe)
 actualizar_registro() {
-    local libro="$1" pdf="$2" detalle="$3"
+    # $4 (opcional) = copia local idéntica al PDF: el peso y el hash se miden ahí,
+    # sin volver a leer el PDF por la red
+    local libro="$1" pdf="$2" detalle="$3" medir="${4:-$2}"
     local peso sha fecha prev paginas peso_carpeta
-    peso=$(du -sb "$pdf" | awk '{printf "%.2f", $1/1048576}' | tr ',' '.')
-    sha=$(sha256sum "$pdf" | awk '{print $1}')
+    peso=$(du -sb "$medir" | awk '{printf "%.2f", $1/1048576}' | tr ',' '.')
+    sha=$(sha256sum "$medir" | awk '{print $1}')
     fecha=$(date '+%Y-%m-%d %H:%M:%S')
     prev=$(awk -F'|' -v c="$libro" '$1==c{print; exit}' "$REGISTRO_CSV" 2>/dev/null || true)
     if [[ -n "$prev" ]]; then
         paginas=$(cut -d'|' -f2 <<< "$prev")
         peso_carpeta=$(cut -d'|' -f3 <<< "$prev")
     else
-        paginas=$(pdfinfo "$pdf" 2>/dev/null | awk '/^Pages:/{print $2}')
+        paginas=$(pdfinfo "$medir" 2>/dev/null | awk '/^Pages:/{print $2}' || true)
         peso_carpeta="?"
     fi
     mkdir -p "$REGISTRO_DIR"
@@ -136,11 +149,19 @@ actualizar_registro() {
 
 ok=0; falta=0; error=0
 shopt -s nullglob
+declare -a PDFS=()
 for pdf in "$PDF_DIR"/*.pdf; do
     libro="$(basename "${pdf%.pdf}")"
     if [[ ${#SOLO[@]} -gt 0 ]] && ! printf '%s\n' "${SOLO[@]}" | grep -qxF "$libro"; then
         continue
     fi
+    PDFS+=("$pdf")
+done
+n=0
+for pdf in "${PDFS[@]}"; do
+    libro="$(basename "${pdf%.pdf}")"
+    n=$((n + 1))
+    _log INFO "[${libro}] ${n} de ${#PDFS[@]}"
     meta=$(meta_buscar "$libro" "$INDICE")
     if [[ -z "$meta" ]]; then
         _log WARN "[${libro}] No está en el CSV — no se toca."
@@ -163,20 +184,46 @@ for pdf in "$PDF_DIR"/*.pdf; do
         actualizar_registro "$libro" "$destino" "Metadatos inyectados después"
         _log OK "[${libro}] Metadatos inyectados → OUTPUT/${libro}.pdf"
     else
-        # PDF ya entregado: se trabaja sobre una copia y solo si sale bien
-        # reemplaza al original (con el mismo número de páginas)
-        copia="${pdf%.pdf}.reinyectando.tmp"
-        paginas_antes=$(pdfinfo "$pdf" 2>/dev/null | awk '/^Pages:/{print $2}' || true)
-        if ! cp -p "$pdf" "$copia" || ! meta_escribir "$libro" "$copia" "$meta" \
-           || [[ "$(pdfinfo "$copia" 2>/dev/null | awk '/^Pages:/{print $2}')" != "$paginas_antes" ]] \
-           || [[ -z "$paginas_antes" ]]; then
-            rm -f "$copia"
-            _log ERROR "[${libro}] no se pudieron escribir los metadatos; el PDF queda como estaba."
-            echo "ERROR|${libro}|no se pudieron escribir los metadatos" >> "$RESULTADOS"
+        # PDF ya entregado (puede estar en una carpeta de red): se baja una copia
+        # a TEMPORALES, se le escriben los metadatos ahí y se sube una sola vez
+        # junto al original, que se reemplaza solo si todo salió bien. Sin
+        # cp -p: las carpetas de red (SMB) no dejan copiar permisos.
+        tam=$(stat -c %s "$pdf" 2>/dev/null || echo 0)
+        libre=$(df -PB1 "$TRABAJO" 2>/dev/null | awk 'NR==2{print $4}' || echo 0)
+        if (( ${libre:-0} < tam + 1073741824 )); then
+            _log ERROR "[${libro}] No hay espacio en ${TEMP_BASE} (necesita $((tam / 1073741824 + 2)) GB); el PDF queda como estaba."
+            echo "ERROR|${libro}|sin espacio en TEMPORALES" >> "$RESULTADOS"
             error=$((error + 1)); continue
         fi
-        mv -f "$copia" "$pdf"
-        actualizar_registro "$libro" "$pdf" "Metadatos reinyectados"
+        trabajo_pdf="${TRABAJO}/${libro}.pdf"
+        COPIA_RED="${pdf%.pdf}.reinyectando.tmp"
+        motivo=""
+        if ! cp "$pdf" "$trabajo_pdf" 2>>"$LOG"; then
+            motivo="no se pudo copiar el PDF a ${TEMP_BASE}"
+        else
+            paginas_antes=$(pdfinfo "$trabajo_pdf" 2>/dev/null | awk '/^Pages:/{print $2}' || true)
+            if [[ -z "$paginas_antes" ]]; then
+                motivo="el PDF no se pudo leer"
+            elif ! meta_escribir "$libro" "$trabajo_pdf" "$meta" >>"$LOG" 2>&1; then
+                motivo="no se pudieron escribir los metadatos"
+            elif [[ "$(pdfinfo "$trabajo_pdf" 2>/dev/null | awk '/^Pages:/{print $2}' || true)" != "$paginas_antes" ]]; then
+                motivo="el PDF cambió de número de páginas al escribir los metadatos"
+            elif ! cp "$trabajo_pdf" "$COPIA_RED" 2>>"$LOG" \
+                 || [[ "$(stat -c %s "$COPIA_RED" 2>/dev/null)" != "$(stat -c %s "$trabajo_pdf")" ]]; then
+                motivo="no se pudo subir el PDF a su carpeta"
+            elif ! mv -f "$COPIA_RED" "$pdf" 2>>"$LOG"; then
+                motivo="no se pudo reemplazar el PDF original"
+            fi
+        fi
+        if [[ -n "$motivo" ]]; then
+            rm -f "$trabajo_pdf" "$COPIA_RED"; COPIA_RED=""
+            _log ERROR "[${libro}] ${motivo}; el PDF queda como estaba."
+            echo "ERROR|${libro}|${motivo}" >> "$RESULTADOS"
+            error=$((error + 1)); continue
+        fi
+        COPIA_RED=""
+        actualizar_registro "$libro" "$pdf" "Metadatos reinyectados" "$trabajo_pdf"
+        rm -f "$trabajo_pdf"
         _log OK "[${libro}] Metadatos reinyectados en ${pdf}"
     fi
     echo "OK|${libro}|" >> "$RESULTADOS"

@@ -2182,7 +2182,7 @@ class Ventana(QMainWindow):
         args = ["--csv", self.meta_iny.ruta, "--meta-config", self.meta_iny.escribir_json(META_JSON_INY),
                 "--output-dir", str(self.carpetas["output"]),
                 "--registro-dir", str(self.carpetas["registro"]),
-                "--pdf-dir", str(carpeta)]
+                "--pdf-dir", str(carpeta), "--temp-dir", str(self.carpetas["temp"])]
         for libro in marcados:
             args += ["--book", libro]
         self.iny_movidos = self._iny_es_sin_meta()

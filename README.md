@@ -153,8 +153,9 @@ una barra lateral:
   marcados que estén, los pasa a OUTPUT y actualiza el registro a `OK`; avisa
   cuáles siguen sin aparecer. Con **Carpeta de PDF › Elegir…** se toma otra
   carpeta (p. ej. OUTPUT) para volver a escribir los metadatos de libros ya
-  entregados: ahí vienen sin marcar, se reescriben en su sitio (sobre una copia
-  que reemplaza al original solo si sale bien) y el registro y el registro
+  entregados: ahí vienen sin marcar, se reescriben en su sitio (el trabajo se
+  hace en una copia en TEMPORALES, que reemplaza al original solo si sale bien;
+  así un PDF en una carpeta de red se lee y se escribe una sola vez) y el registro y el registro
   OCR-ICR se actualizan con el SHA-256 y el peso nuevos. El botón
   **SIN METADATOS** vuelve a la carpeta por defecto.
 - **Crear contenedores GDOC:** genera el Excel (.xls) para importar contenedores en GDOC
