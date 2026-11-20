@@ -475,6 +475,26 @@ def formato_gb(nbytes):
 # CSV DE METADATOS → CAMPOS DEL PDF (Procesamiento › METADATOS e Inyectar)
 # ─────────────────────────────────────────────────────────────────────────────
 
+class SelectorEntrega(QSpinBox):
+    """«ENTREGA » fijo y solo el número editable, siempre con dos cifras: ENTREGA 06."""
+
+    def __init__(self, ajustes, clave):
+        super().__init__(minimum=RO.ENTREGAS[0], maximum=RO.ENTREGAS[-1])
+        self.setPrefix("ENTREGA ")
+        self.setMinimumWidth(150)
+        try:
+            self.setValue(int(ajustes.value(clave, 1)))
+        except (TypeError, ValueError):
+            self.setValue(1)
+        self.valueChanged.connect(lambda v: ajustes.setValue(clave, v))
+
+    def textFromValue(self, valor):
+        return f"{valor:02d}"
+
+    def currentData(self):
+        return self.value()
+
+
 class ComboCompleto(QComboBox):
     """Combo angosto cuya lista desplegable se abre al ancho del texto más largo."""
 
@@ -1345,14 +1365,7 @@ class Ventana(QMainWindow):
         fila = QHBoxLayout()
         fila.setSpacing(12)
         fila.addWidget(QLabel("Entrega (nivel3)", objectName="subtitulo"))
-        self.gdoc_entrega = QComboBox()
-        for n in CG.ENTREGAS:
-            self.gdoc_entrega.addItem(f"ENTREGA {n}", n)
-        self.gdoc_entrega.setMinimumWidth(170)
-        guardada = self.gdoc_entrega.findData(int(self.ajustes.value("gdoc_entrega", 1)))
-        self.gdoc_entrega.setCurrentIndex(max(guardada, 0))
-        self.gdoc_entrega.currentIndexChanged.connect(
-            lambda _: self.ajustes.setValue("gdoc_entrega", self.gdoc_entrega.currentData()))
+        self.gdoc_entrega = SelectorEntrega(self.ajustes, "gdoc_entrega")
         fila.addWidget(self.gdoc_entrega)
         fila.addSpacing(24)
         fila.addWidget(QLabel("Sede (Campo_1)", objectName="subtitulo"))
@@ -1438,14 +1451,7 @@ class Ventana(QMainWindow):
             grid.addWidget(b, i, 2)
             self.ocricr_campo[clave] = campo
         grid.addWidget(QLabel("Entrega", objectName="subtitulo"), 2, 0)
-        self.ocricr_entrega = QComboBox()
-        for n in RO.ENTREGAS:
-            self.ocricr_entrega.addItem(f"ENTREGA {n:02d}", n)
-        self.ocricr_entrega.setMinimumWidth(170)
-        guardada = self.ocricr_entrega.findData(int(self.ajustes.value("ocricr_entrega", 1)))
-        self.ocricr_entrega.setCurrentIndex(max(guardada, 0))
-        self.ocricr_entrega.currentIndexChanged.connect(
-            lambda _: self.ajustes.setValue("ocricr_entrega", self.ocricr_entrega.currentData()))
+        self.ocricr_entrega = SelectorEntrega(self.ajustes, "ocricr_entrega")
         grid.addWidget(self.ocricr_entrega, 2, 1, Qt.AlignLeft)
         # El SHA-256 obliga a leer cada PDF completo: es lo que más demora. Sin él,
         # la columna HASH queda vacía (sirve para revisar páginas, pesos e imágenes).
@@ -1811,7 +1817,7 @@ class Ventana(QMainWindow):
             return
         paginas = sum(f[10] for f in filas)
         paginas_txt = f"{paginas:,}".replace(",", ".")
-        self.gdoc_resultado.setText(f"✓ {len(filas)} libro(s), {paginas_txt} páginas · ENTREGA {entrega} · "
+        self.gdoc_resultado.setText(f"✓ {len(filas)} libro(s), {paginas_txt} páginas · ENTREGA {entrega:02d} · "
                                     f"sede {sede}\n{destino}")
 
     # ── Crear registro OCR-ICR ─────────────────────────────────────────────
@@ -2283,13 +2289,8 @@ class Ventana(QMainWindow):
         abajo.addSpacing(16)
         # Entrega de estos libros: va en el registro OCR-ICR del día (carpeta REGISTRO)
         abajo.addWidget(QLabel("Entrega", objectName="subtitulo"))
-        self.entrega_proc = QComboBox()
-        for n in RO.ENTREGAS:
-            self.entrega_proc.addItem(f"ENTREGA {n:02d}", n)
+        self.entrega_proc = SelectorEntrega(self.ajustes, "entrega_proc")
         self.entrega_proc.setToolTip("Se escribe en el registro OCR-ICR del día, en la carpeta REGISTRO")
-        self.entrega_proc.setCurrentIndex(max(self.entrega_proc.findData(int(self.ajustes.value("entrega_proc", 1))), 0))
-        self.entrega_proc.currentIndexChanged.connect(
-            lambda _: self.ajustes.setValue("entrega_proc", self.entrega_proc.currentData()))
         abajo.addWidget(self.entrega_proc)
         abajo.addSpacing(16)
         self.aviso = QLabel(objectName="aviso")

@@ -36,7 +36,7 @@ RESGUARDO = "ARCHIVO"
 ESTATUS = "DENTRO"
 NIVEL1 = "CONSORCIO D3LF1N"
 NIVEL2 = "CAMARA DE REPRESENTANTES"
-ENTREGAS = range(1, 31)
+ENTREGAS = range(1, 100)
 ANCHOS = [16, 12, 10, 12, 10, 22, 30, 14, 14, 16, 10, 10, 10]     # caracteres por columna
 SEDES = ["AGN", "BIBLIOTECA", "FUNZA", "SANTA CLARA"]
 
@@ -62,7 +62,7 @@ def paginas_pdf(ruta):
 
 
 def fila(codigo, paginas, entrega, sede):
-    return [codigo, "", "", RESGUARDO, ESTATUS, NIVEL1, NIVEL2, f"ENTREGA {entrega}",
+    return [codigo, "", "", RESGUARDO, ESTATUS, NIVEL1, NIVEL2, f"ENTREGA {entrega:02d}",
             sede, codigo, paginas, "", ""]
 
 

@@ -51,7 +51,7 @@ from pathlib import Path
 
 ENCABEZADOS = ["CODIFICACION", "LIBRO ", "# IMAGENES", "PESO DE PDF", "PESO DE CARPETA TIFF",
                "FECHA", "ENTREGA  ", "HASH", ""]
-ENTREGAS = range(1, 31)
+ENTREGAS = range(1, 100)
 EXT_TIFF = {".tif", ".tiff"}
 MESES = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"]
 

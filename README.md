@@ -154,7 +154,7 @@ una barra lateral:
   siguen sin aparecer. Usa las carpetas de Procesamiento › CARPETAS DE TRABAJO.
 - **Crear contenedores GDOC:** genera el Excel (.xls) para importar contenedores en GDOC
   (ver abajo). Se eligen la carpeta de PDF (por defecto OUTPUT), la entrega
-  (ENTREGA 1 a 30) y los libros.
+  (ENTREGA 01 a 99) y los libros.
 - **Crear registro OCR-ICR:** genera el CSV de registro de una entrega (ver
   abajo). Se eligen la carpeta de PDF, la carpeta de TIFF, la entrega y los
   libros.
@@ -220,7 +220,7 @@ git tag v1.1.0 && git push origin main --tags
 | contenedor, Campo_2 | Código del libro |
 | resguardo · estatus | ARCHIVO · DENTRO |
 | nivel1 · nivel2 | CONSORCIO D3LF1N · CAMARA DE REPRESENTANTES |
-| nivel3 | ENTREGA 1 a ENTREGA 30 |
+| nivel3 | ENTREGA 01 a ENTREGA 99 |
 | Campo_1 | Sede |
 | Campo_3 | Número de páginas |
 | ubicacion, posicion, Campo_4, Campo_5 | Vacíos |
