@@ -10,8 +10,9 @@
 #           fragmento, el nombre de la subcarpeta (sin " OK"). También se elige qué columna es el código del
 #           libro y si la primera fila es encabezado.
 #
-#           Sin --config se usa PREDETERMINADA, que reproduce los metadatos de
-#           siempre (CSV: código, fondo, subfondo, equipo, resolución).
+#           Sin --config se usa PREDETERMINADA, hecha para el CSV de seguimiento
+#           de calidad (con encabezado): 1 NOMBRE, 4 FONDO, 5 SUBFONDO,
+#           7 ESCÁNER, 8 RESOLUCIÓN.
 #           La interfaz guarda la configuración en sus ajustes y la pasa a
 #           main.sh e inyectar_metadatos.sh con --meta-config.
 #
@@ -53,15 +54,15 @@ CAMPOS = [
 
 PREDETERMINADA = {
     "codigo": 1,
-    "encabezado": None,
+    "encabezado": True,
     "campos": {
         "Title": "{1}",
-        "Subject": "Congreso de la República - {3}",
+        "Subject": "Congreso de la República - {5}",
         "Author": "Congreso de la República",
-        "Keywords": "Fondo: {2}, Subfondo: {3}, Código: {1}, Resolución: {5}, Equipo: {4}",
-        "Creator": "{4}",
+        "Keywords": "Fondo: {4}, Subfondo: {5}, Código: {1}, Resolución: {8}, Equipo: {7}",
+        "Creator": "{7}",
         "Producer": "Sistema de Digitalización - Congreso de la República",
-        "Description": "Documento digitalizado - Código: {1}",
+        "Description": "",
     },
 }
 

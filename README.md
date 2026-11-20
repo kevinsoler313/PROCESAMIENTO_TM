@@ -328,17 +328,23 @@ bash inyectar_metadatos.sh --csv otro.csv --book AR10611       # solo ese libro
 `metadatos.sh` reúne la lectura del CSV y la escritura de metadatos; lo usan
 `main.sh` e `inyectar_metadatos.sh`, así que ambos escriben los mismos campos.
 Qué columna va en cada campo lo decide `metadatos.py`, con el JSON de
-`--meta-config` (formato en su cabecera). Sin él se escribe lo de siempre:
+`--meta-config` (formato en su cabecera). Sin él se usa la configuración
+predeterminada, hecha para el CSV de seguimiento de calidad: primera fila de
+encabezado, código en la columna 1 (NOMBRE), 4 FONDO, 5 SUBFONDO, 7 ESCÁNER y
+8 RESOLUCIÓN.
 
 | Campo | Plantilla predeterminada |
 |---|---|
 | Title | `{1}` |
-| Subject | `Congreso de la República - {3}` |
+| Subject | `Congreso de la República - {5}` |
 | Author | `Congreso de la República` |
-| Keywords | `Fondo: {2}, Subfondo: {3}, Código: {1}, Resolución: {5}, Equipo: {4}` |
-| Creator | `{4}` |
+| Keywords | `Fondo: {4}, Subfondo: {5}, Código: {1}, Resolución: {8}, Equipo: {7}` |
+| Creator | `{7}` |
 | Producer | `Sistema de Digitalización - Congreso de la República` |
-| Description | `Documento digitalizado - Código: {1}` |
+| Description | *(vacía: Subject ya ocupa ese lugar en PDF/A)* |
+
+Un equipo que ya guardó su propia configuración la conserva; para pasar a esta,
+botón **Restablecer predeterminados** en la pestaña METADATOS.
 
 Un campo con la plantilla vacía no se escribe y conserva lo que ya traiga el
 PDF; por ejemplo, el Productor que pone ocrmypdf.
